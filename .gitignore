@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+*.tsbuildinfo
+*.log
+.DS_Store
+build/icon.ico
+build/icon-*.png
+test/
+resources/ffmpeg/ffmpeg.exe
+resources/ffmpeg/ffprobe.exe

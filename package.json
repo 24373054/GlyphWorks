@@ -1,0 +1,105 @@
+{
+  "name": "08-ascii-win",
+  "version": "1.0.0",
+  "description": "字符工坊 GlyphWorks Windows 版：图片/视频一键生成 ASCII 字符画",
+  "author": "KEENTROPY",
+  "license": "MIT",
+  "private": true,
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "verify": "npm run lint && npm run typecheck && npm run build",
+    "icon": "node scripts/make-icons.mjs",
+    "smoke": "electron . --smoke",
+    "dist": "npm run icon && electron-vite build && electron-builder --win nsis",
+    "dist:dir": "npm run icon && electron-vite build && electron-builder --win dir"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@types/node": "^24",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^43",
+    "electron-builder": "^26",
+    "electron-vite": "^5",
+    "eslint": "^9",
+    "eslint-plugin-react-hooks": "^5",
+    "globals": "^16",
+    "png-to-ico": "^3",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "typescript": "^5",
+    "typescript-eslint": "^8",
+    "vite": "^7"
+  },
+  "build": {
+    "appId": "com.keentropy.glyphworks",
+    "productName": "GlyphWorks",
+    "copyright": "Copyright © 2026 KEENTROPY demo",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ffmpeg",
+        "to": "ffmpeg",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "GlyphWorks-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "字符工坊 GlyphWorks",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "GlyphWorks-${version}-Setup.${ext}"
+    },
+    "fileAssociations": [
+      { "ext": "mp4", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "webm", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "mkv", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "mov", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "avi", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "wmv", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "ogg", "name": "GlyphWorks Video", "description": "视频", "icon": "build/icon.ico" },
+      { "ext": "png", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "jpg", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "jpeg", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "gif", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "webp", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "avif", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "bmp", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "svg", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "tif", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "tiff", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "heic", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" },
+      { "ext": "heif", "name": "GlyphWorks Image", "description": "图片", "icon": "build/icon.ico" }
+    ]
+  }
+}
