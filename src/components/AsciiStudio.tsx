@@ -22,7 +22,8 @@ import {
 } from "@/lib/ascii";
 import TestPattern from "./TestPattern";
 import { demoWoodcut } from "@/lib/demo";
-import type { CliTask, ProbeResult } from "@/shared/ipc";
+import { DEFAULT_SIGNATURE, drawSignature } from "@/lib/signature";
+import type { CliTask, ProbeResult, SignatureOptions } from "@/shared/ipc";
 
 type MediaKind = "image" | "video";
 type ChannelMode = "density" | "luminance" | "dual";
@@ -91,6 +92,57 @@ const PRESETS: Preset[] = [
     options: { columns: 200, ramp: "classic", contrast: 0.9, dither: "floyd", theme: "dark", halfBlock: false, invert: false },
   },
 ];
+
+/** 样张档案:每次「盖印打样」留下一张版次卡。 */
+interface ArchiveEntry {
+  id: string;
+  edition: number;
+  mediaName: string;
+  thumb: string;
+  options: AsciiOptions;
+  channel: ChannelMode;
+  signature: SignatureOptions;
+  createdAt: number;
+}
+
+const ARCHIVE_KEY = "glyphworks.archive.v1";
+const RECENT_KEY = "glyphworks.recent.v1";
+const ARCHIVE_LIMIT = 24;
+const RECENT_LIMIT = 8;
+/** 成作画布像素上限(约 64MP),防止高列数 × 高精度分配失败。 */
+const MAX_PROOF_PIXELS = 64_000_000;
+
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return JSON.parse(raw) as T;
+  } catch {
+    // 本地数据损坏时回退默认值
+  }
+  return fallback;
+}
+
+function saveJson(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // 存储满时静默降级,不影响转换
+  }
+}
+
+/** 按像素上限把成作精度收敛到 1 / 2 / 4 档。 */
+function clampProofScale(columns: number, rows: number, requested: number): number {
+  const probe = document.createElement("canvas").getContext("2d");
+  if (!probe) return 1;
+  probe.font = `12px ${FONT_STACK}`;
+  const charWidth = Math.max(probe.measureText("M").width, 1);
+  const lineHeight = 12 * 1.22;
+  const width1 = Math.ceil(charWidth * columns) + 10;
+  const height1 = Math.ceil(lineHeight * rows) + 10;
+  const areaScale = Math.sqrt(MAX_PROOF_PIXELS / (width1 * height1));
+  const snapped = areaScale >= 4 ? 4 : areaScale >= 2 ? 2 : 1;
+  return Math.max(1, Math.min(requested, snapped));
+}
 
 const IMAGE_EXTS = [
   "png", "jpg", "jpeg", "webp", "gif", "avif", "bmp", "svg", "tif", "tiff", "heic", "heif",
@@ -283,7 +335,8 @@ function renderPlanToCanvas(
 
 /**
  * Render the ASCII art into the given canvas at its intrinsic bitmap size
- * (fixed 12px font, measured character metrics).
+ * (12px font × scale, measured character metrics). With a signature present,
+ * a cinnabar seal and colophon are stamped onto the finished print.
  */
 function drawAsciiToCanvas(
   canvas: HTMLCanvasElement,
@@ -298,8 +351,9 @@ function drawAsciiToCanvas(
   chan: ChannelMode,
   theme: OutputTheme,
   ramp: RampId,
+  opts: { scale?: number; signature?: SignatureOptions } = {},
 ) {
-  const fontSize = 12;
+  const fontSize = 12 * (opts.scale ?? 1);
   const context = canvas.getContext("2d");
   if (!context) return;
   context.font = `${fontSize}px ${FONT_STACK}`;
@@ -321,6 +375,7 @@ function drawAsciiToCanvas(
       { width, height },
       true,
     );
+    if (opts.signature) drawSignature(context, width, height, opts.signature, theme);
     return;
   }
   const colors = themeColors(theme);
@@ -332,6 +387,7 @@ function drawAsciiToCanvas(
   converted.text.split("\n").forEach((line, index) => {
     context.fillText(line, 5, index * lineHeight + 5);
   });
+  if (opts.signature) drawSignature(context, width, height, opts.signature, theme);
 }
 
 /** Convert a grid-size RGB24 frame (from ffmpeg decode) into the export canvas. */
@@ -344,6 +400,7 @@ function renderGridFrame(
   channel: ChannelMode,
   dualLUT: Uint8Array,
   size: { width: number; height: number },
+  signature?: SignatureOptions,
 ) {
   const grid = new Float32Array(columns * sampleRows);
   for (let i = 0; i < grid.length; i += 1) {
@@ -353,6 +410,8 @@ function renderGridFrame(
   const toned = toneMap(grid, options.contrast, options.invert);
   const halfBlock = channel === "density" && options.halfBlock;
   const textRows = halfBlock ? sampleRows / 2 : sampleRows;
+  const context = canvas.getContext("2d");
+  if (!context) return;
   if (channel !== "density") {
     const plan =
       channel === "dual"
@@ -377,12 +436,14 @@ function renderGridFrame(
       size,
       true,
     );
+    if (signature) drawSignature(context, canvas.width, canvas.height, signature, options.theme);
     return;
   }
   const text = halfBlock
     ? encodeHalfBlock(toned, columns, sampleRows, options.ramp, options.dither, options.theme)
     : encodeGrid(toned, columns, sampleRows, options.ramp, options.dither, options.theme);
   renderTextToCanvas(canvas, text, columns, textRows, options.theme, size, true);
+  if (signature) drawSignature(context, canvas.width, canvas.height, signature, options.theme);
 }
 
 function makeExportCanvas(
@@ -505,6 +566,16 @@ export default function AsciiStudio() {
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [proofNumber, setProofNumber] = useState(0);
   const [appliedTheme, setAppliedTheme] = useState<OutputTheme>("dark");
+  const [signature, setSignature] = useState<SignatureOptions>(DEFAULT_SIGNATURE);
+  const [exportScale, setExportScale] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [compareOn, setCompareOn] = useState(false);
+  const [compareUrl, setCompareUrl] = useState<string | null>(null);
+  const [archive, setArchive] = useState<ArchiveEntry[]>(() =>
+    loadJson<ArchiveEntry[]>(ARCHIVE_KEY, []),
+  );
+  const [recent, setRecent] = useState<string[]>(() => loadJson<string[]>(RECENT_KEY, []));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -529,6 +600,11 @@ export default function AsciiStudio() {
   const cliStartedRef = useRef(false);
   const proofPrintRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef(false);
+  const proofNumberRef = useRef(0);
+  const stampRef = useRef<{ edition: number; signature: SignatureOptions } | null>(null);
+  const mediaNameRef = useRef("");
+  const dragPathRef = useRef<string | null>(null);
+  const panRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
 
   const setOption = useCallback(
     <K extends keyof AsciiOptions>(key: K, value: AsciiOptions[K]) => {
@@ -597,6 +673,14 @@ export default function AsciiStudio() {
       setActivePreset(null);
       setDirty(false);
       revealRef.current = true;
+      proofNumberRef.current = 0;
+      setProofNumber(0);
+      setCompareOn(false);
+      setCompareUrl(null);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      dragPathRef.current = null;
+      mediaNameRef.current = next.name;
     },
     [options, channel],
   );
@@ -644,6 +728,12 @@ export default function AsciiStudio() {
         native: false,
         probe: resolvedProbe,
       });
+      setRecent((previous) => {
+        const next = [filePath, ...previous.filter((p) => p !== filePath)].slice(0, RECENT_LIMIT);
+        saveJson(RECENT_KEY, next);
+        return next;
+      });
+      void window.app.markRecent(filePath);
     },
     [resetMediaState],
   );
@@ -909,11 +999,15 @@ export default function AsciiStudio() {
           appliedChannel,
           appliedOptions.theme,
           appliedOptions.ramp,
+          { signature },
         );
       }
       setOutput(converted);
       setGeneratedMs(Math.max(1, Math.round(performance.now() - started)));
       setAppliedTheme(appliedOptions.theme);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      dragPathRef.current = null;
       if (revealRef.current) {
         revealRef.current = false;
         const printEl = proofPrintRef.current;
@@ -923,10 +1017,37 @@ export default function AsciiStudio() {
           printEl.classList.add("is-printing");
         }
       }
+      if (stampRef.current && bitmapCanvas) {
+        const stamp = stampRef.current;
+        stampRef.current = null;
+        const thumb = document.createElement("canvas");
+        const thumbScale = Math.min(1, 240 / Math.max(bitmapCanvas.width, 1));
+        thumb.width = Math.max(1, Math.round(bitmapCanvas.width * thumbScale));
+        thumb.height = Math.max(1, Math.round(bitmapCanvas.height * thumbScale));
+        const thumbContext = thumb.getContext("2d");
+        if (thumbContext) {
+          thumbContext.drawImage(bitmapCanvas, 0, 0, thumb.width, thumb.height);
+          const entry: ArchiveEntry = {
+            id: `${Date.now()}-${stamp.edition}`,
+            edition: stamp.edition,
+            mediaName: mediaNameRef.current,
+            thumb: thumb.toDataURL("image/jpeg", 0.72),
+            options: { ...appliedOptions },
+            channel: appliedChannel,
+            signature: stamp.signature,
+            createdAt: Date.now(),
+          };
+          setArchive((previous) => {
+            const next = [entry, ...previous].slice(0, ARCHIVE_LIMIT);
+            saveJson(ARCHIVE_KEY, next);
+            return next;
+          });
+        }
+      }
     } catch (renderError) {
       setError(`渲染失败：${String(renderError).slice(0, 400)}`);
     }
-  }, [captureBitmap]);
+  }, [captureBitmap, signature]);
 
   useEffect(() => {
     if (!media) return;
@@ -971,8 +1092,10 @@ export default function AsciiStudio() {
               LUM_LUT,
             );
     }
-    drawAsciiToCanvas(canvas, converted, plan, channel, options.theme, options.ramp);
-  }, [captureBitmap, channel, options]);
+    drawAsciiToCanvas(canvas, converted, plan, channel, options.theme, options.ramp, {
+      signature,
+    });
+  }, [captureBitmap, channel, options, signature]);
 
   useEffect(() => {
     if (!(media?.kind === "video" && !media.native && live)) return;
@@ -1008,9 +1131,11 @@ export default function AsciiStudio() {
     appliedRef.current = { options, channel };
     setDirty(false);
     revealRef.current = true;
-    setProofNumber((value) => value + 1);
+    proofNumberRef.current += 1;
+    setProofNumber(proofNumberRef.current);
+    stampRef.current = { edition: proofNumberRef.current, signature };
     setRenderVersion((value) => value + 1);
-  }, [options, channel]);
+  }, [options, channel, signature]);
 
   const changeChannel = useCallback(
     (next: ChannelMode) => {
@@ -1051,15 +1176,122 @@ export default function AsciiStudio() {
     await window.app.saveText(`${stem}-ascii.txt`, output.text);
   }, [media, output]);
 
+  const changeSignature = useCallback((key: keyof SignatureOptions, value: string | boolean) => {
+    setSignature((previous) => ({ ...previous, [key]: value }));
+    setRenderVersion((value) => value + 1);
+  }, []);
+
+  /** 按当前已应用参数重绘一版成作(供 PNG 保存与拖出),精度按像素上限收敛。 */
+  const renderProofCanvas = useCallback(
+    async (scale: number): Promise<HTMLCanvasElement | null> => {
+      const { options: appliedOptions, channel: appliedChannel } = appliedRef.current;
+      const source = captureBitmap(appliedOptions.theme);
+      if (!source) return null;
+      const effectiveOptions =
+        appliedChannel === "density"
+          ? appliedOptions
+          : { ...appliedOptions, halfBlock: false };
+      const metrics = canvasFontMetrics();
+      const aspectFactor = metrics.charWEm / 1.22;
+      const converted = convertBitmap(source, effectiveOptions, aspectFactor);
+      const effectiveScale = clampProofScale(converted.columns, converted.rows, scale);
+      let plan: DualPlan | null = null;
+      if (appliedChannel !== "density") {
+        const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
+        const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
+        plan =
+          appliedChannel === "dual"
+            ? planDualLUT(
+                converted.toned,
+                converted.columns,
+                converted.sampleRows,
+                dualLUT,
+                effectiveOptions.dither,
+              )
+            : planLuminanceChannel(
+                converted.toned,
+                converted.columns,
+                converted.sampleRows,
+                RAMPS[appliedOptions.ramp],
+                effectiveOptions.dither,
+                appliedOptions.theme,
+                LUM_LUT,
+              );
+      }
+      const canvas = document.createElement("canvas");
+      drawAsciiToCanvas(
+        canvas,
+        converted,
+        plan,
+        appliedChannel,
+        appliedOptions.theme,
+        appliedOptions.ramp,
+        { scale: effectiveScale, signature },
+      );
+      return canvas;
+    },
+    [captureBitmap, signature],
+  );
+
   const downloadPng = useCallback(async () => {
     if (!media) return;
     const stem = media.name.replace(/\.[^.]+$/, "");
-    const canvas = live ? liveCanvasRef.current : bitmapCanvasRef.current;
+    const canvas = await renderProofCanvas(exportScale);
     if (!canvas) return;
     const buffer = await canvasToBuffer(canvas, "image/png");
     if (!buffer) return;
     await window.app.saveBuffer(`${stem}-ascii.png`, buffer, "image/png");
-  }, [live, media]);
+  }, [media, renderProofCanvas, exportScale]);
+
+  const prepareDragPng = useCallback(async (): Promise<string | null> => {
+    if (!media) return null;
+    const canvas = await renderProofCanvas(exportScale);
+    if (!canvas) return null;
+    const buffer = await canvasToBuffer(canvas, "image/png");
+    if (!buffer) return null;
+    const stem = media.name.replace(/\.[^.]+$/, "");
+    return window.app.saveTemp(buffer, `${stem}-ascii.png`);
+  }, [media, renderProofCanvas, exportScale]);
+
+  const toggleCompare = useCallback(() => {
+    if (!compareOn) {
+      const source = captureBitmap(appliedRef.current.options.theme);
+      if (source) {
+        const canvas = document.createElement("canvas");
+        canvas.width = source.width;
+        canvas.height = source.height;
+        const context = canvas.getContext("2d");
+        if (context) {
+          context.putImageData(source, 0, 0);
+          setCompareUrl(canvas.toDataURL("image/jpeg", 0.85));
+        } else {
+          setCompareUrl(null);
+        }
+      } else {
+        setCompareUrl(null);
+      }
+    }
+    setCompareOn((previous) => !previous);
+  }, [compareOn, captureBitmap]);
+
+  const updateArchive = useCallback((updater: (previous: ArchiveEntry[]) => ArchiveEntry[]) => {
+    setArchive((previous) => {
+      const next = updater(previous);
+      saveJson(ARCHIVE_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const restoreEntry = useCallback((entry: ArchiveEntry) => {
+    setOptions(entry.options);
+    setChannel(entry.channel);
+    setSignature(entry.signature);
+    setActivePreset(null);
+    appliedRef.current = { options: entry.options, channel: entry.channel };
+    setDirty(false);
+    revealRef.current = true;
+    setRenderVersion((value) => value + 1);
+  }, []);
 
   const runVideoExport = useCallback(
     async (input: {
@@ -1068,8 +1300,16 @@ export default function AsciiStudio() {
       options: AsciiOptions;
       channel: ChannelMode;
       probe: ProbeResult | null;
+      signature: SignatureOptions;
     }): Promise<{ ok: boolean; error?: string }> => {
-      const { outputPath, sourcePath, options: exportOptions, channel: exportChannel, probe: exportProbe } = input;
+      const {
+        outputPath,
+        sourcePath,
+        options: exportOptions,
+        channel: exportChannel,
+        probe: exportProbe,
+        signature: exportSignature,
+      } = input;
       const duration = exportProbe?.duration ?? null;
       if (!duration || duration <= 0) {
         return { ok: false, error: "无法读取视频时长，请重新选择文件。" };
@@ -1123,6 +1363,7 @@ export default function AsciiStudio() {
             exportChannel,
             dualLUT,
             { width: canvas.width, height: canvas.height },
+            exportSignature,
           );
           const jpeg = canvasToJpegBytes(canvas, 0.95);
           if (jpeg) await window.app.writeFrame(sessionId, index, jpeg.buffer);
@@ -1179,11 +1420,12 @@ export default function AsciiStudio() {
       options,
       channel,
       probe,
+      signature,
     });
     if (!result.ok && result.error !== "cancelled") {
       setError(`导出失败：${result.error}`);
     }
-  }, [media, options, channel, probe, runVideoExport]);
+  }, [media, options, channel, probe, signature, runVideoExport]);
 
   const runCli = useCallback(
     async (task: CliTask) => {
@@ -1239,6 +1481,7 @@ export default function AsciiStudio() {
                     );
             }
             const outputCanvas = document.createElement("canvas");
+            const taskSignature = task.signature ?? DEFAULT_SIGNATURE;
             drawAsciiToCanvas(
               outputCanvas,
               converted,
@@ -1246,6 +1489,7 @@ export default function AsciiStudio() {
               task.options.channel,
               task.options.theme,
               task.options.ramp,
+              { scale: clampProofScale(converted.columns, converted.rows, task.scale ?? 1), signature: taskSignature },
             );
             const buffer = await canvasToBuffer(outputCanvas, "image/png");
             if (!buffer) throw new Error("PNG 渲染失败");
@@ -1262,6 +1506,7 @@ export default function AsciiStudio() {
           options: task.options,
           channel: task.options.channel,
           probe: inputProbe,
+          signature: task.signature ?? DEFAULT_SIGNATURE,
         });
         if (result.ok) {
           window.app.cliDone(0, task.output);
@@ -1299,6 +1544,10 @@ export default function AsciiStudio() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && compareOn) {
+        setCompareOn(false);
+        return;
+      }
       const mod = event.ctrlKey || event.metaKey;
       if (!mod) return;
       const key = event.key.toLowerCase();
@@ -1329,7 +1578,26 @@ export default function AsciiStudio() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [media, output, live, openFromDialog, applyParams, copyText, downloadTxt, downloadPng]);
+  }, [media, output, live, compareOn, openFromDialog, applyParams, copyText, downloadTxt, downloadPng]);
+
+  // 放大检视:样张上滚轮缩放(需非被动监听才能 preventDefault 阻止页面滚动)
+  useEffect(() => {
+    const el = proofPrintRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      const hasProof =
+        Boolean(output) || (live && media?.kind === "video" && !media.native);
+      if (!hasProof || compareOn) return;
+      event.preventDefault();
+      setZoom((previous) => {
+        const next = Math.min(8, Math.max(1, previous * (event.deltaY < 0 ? 1.12 : 0.89)));
+        if (next === 1) setPan({ x: 0, y: 0 });
+        return next;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [output, live, media, compareOn]);
 
   const isVideo = media?.kind === "video";
   const videoDuration = isVideo
@@ -1564,6 +1832,34 @@ export default function AsciiStudio() {
               )}
               </div>
             )}
+
+            {recent.length > 0 && (
+              <div className="recent">
+                <div className="recent-head">
+                  <span className="recent-title">最近 · 图档</span>
+                  <button
+                    type="button"
+                    className="recent-clear"
+                    onClick={() => {
+                      setRecent([]);
+                      saveJson(RECENT_KEY, []);
+                      void window.app.clearRecent();
+                    }}
+                  >
+                    清空
+                  </button>
+                </div>
+                <ul className="recent-list">
+                  {recent.map((filePath) => (
+                    <li key={filePath}>
+                      <button type="button" title={filePath} onClick={() => void loadPath(filePath)}>
+                        {basename(filePath)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
 
           <section className="panel-section">
@@ -1668,6 +1964,53 @@ export default function AsciiStudio() {
                 <span>反色</span>
               </label>
             </div>
+            <div className="signature-block">
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={signature.enabled}
+                  onChange={(event) => changeSignature("enabled", event.target.checked)}
+                />
+                <span>落款钤印（盖于样张 / PNG / MP4）</span>
+              </label>
+              {signature.enabled && (
+                <>
+                  <label className="field">
+                    <span>印章字（1–4）</span>
+                    <input
+                      type="text"
+                      className="text-input"
+                      maxLength={4}
+                      value={signature.sealText}
+                      onChange={(event) => changeSignature("sealText", event.target.value)}
+                      placeholder="工"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>题款</span>
+                    <input
+                      type="text"
+                      className="text-input"
+                      maxLength={40}
+                      value={signature.colophon}
+                      onChange={(event) => changeSignature("colophon", event.target.value)}
+                      placeholder="GLYPHWORKS"
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+            <label className="field">
+              <span>成作精度（PNG）<em>{exportScale}×</em></span>
+              <select
+                value={exportScale}
+                onChange={(event) => setExportScale(Number(event.target.value))}
+              >
+                <option value={1}>1× · 约 800 px 宽</option>
+                <option value={2}>2× · 约 1600 px 宽</option>
+                <option value={4}>4× · 约 3200 px 宽</option>
+              </select>
+            </label>
           </div>
           </section>
 
@@ -1698,14 +2041,79 @@ export default function AsciiStudio() {
                 <div className="proof-mat" data-theme={live && isVideo ? options.theme : appliedTheme}>
                   <span className="reg-mark reg-top" aria-hidden="true">+</span>
                   <span className="reg-mark reg-bottom" aria-hidden="true">+</span>
-                  <div className="proof-print" ref={proofPrintRef}>
+                  <div
+                    className="proof-print"
+                    ref={proofPrintRef}
+                    onPointerDown={(event) => {
+                      if (zoom <= 1) return;
+                      panRef.current = {
+                        active: true,
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        origX: pan.x,
+                        origY: pan.y,
+                      };
+                      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+                    }}
+                    onPointerMove={(event) => {
+                      const p = panRef.current;
+                      if (!p.active) return;
+                      setPan({
+                        x: p.origX + (event.clientX - p.startX),
+                        y: p.origY + (event.clientY - p.startY),
+                      });
+                    }}
+                    onPointerUp={() => {
+                      panRef.current.active = false;
+                    }}
+                    onPointerCancel={() => {
+                      panRef.current.active = false;
+                    }}
+                    onDoubleClick={() => {
+                      setZoom(1);
+                      setPan({ x: 0, y: 0 });
+                    }}
+                  >
                     {live && isVideo && !media.native ? (
-                      <canvas ref={liveCanvasRef} className="bitmap-canvas" />
+                      <canvas
+                        ref={liveCanvasRef}
+                        className="bitmap-canvas"
+                        style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+                      />
                     ) : (
-                      <canvas ref={bitmapCanvasRef} className="bitmap-canvas" />
+                      <canvas
+                        ref={bitmapCanvasRef}
+                        className="bitmap-canvas"
+                        style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+                      />
                     )}
                   </div>
+                  {zoom > 1 && (
+                    <span className="zoom-chip">×{zoom.toFixed(1)} · 双击复位</span>
+                  )}
                 </div>
+                {compareOn && (
+                  <div
+                    className="compare-overlay"
+                    role="button"
+                    tabIndex={0}
+                    aria-label="返回样张"
+                    onClick={() => setCompareOn(false)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setCompareOn(false);
+                      }
+                    }}
+                  >
+                    {compareUrl ? (
+                      <img src={compareUrl} alt="" />
+                    ) : (
+                      <span className="compare-empty">暂无原图画面</span>
+                    )}
+                    <span className="compare-tag">原图 · 点击返回样张</span>
+                  </div>
+                )}
                 <div className="proof-colophon">
                   <span className="proof-edition">打样 · 第 {proofNumber} 版</span>
                   <span className="output-stats">
@@ -1738,8 +2146,37 @@ export default function AsciiStudio() {
             <button type="button" className="action-button" disabled={!output && !live} onClick={() => void downloadTxt()}>
               存 TXT
             </button>
-            <button type="button" className="action-button" disabled={!output && !live} onClick={() => void downloadPng()}>
+            <button
+              type="button"
+              className="action-button drag-png"
+              draggable
+              disabled={!output && !live}
+              title="点击另存为；按住拖到桌面或文件夹，直接保存当前精度 PNG"
+              onPointerDown={() => {
+                if (!dragPathRef.current) {
+                  void prepareDragPng().then((path) => {
+                    if (path) dragPathRef.current = path;
+                  });
+                }
+              }}
+              onDragStart={(event) => {
+                if (dragPathRef.current) {
+                  event.preventDefault();
+                  void window.app.startDrag(dragPathRef.current);
+                }
+              }}
+              onClick={() => void downloadPng()}
+            >
               存 PNG
+            </button>
+            <button
+              type="button"
+              className={`action-button ${compareOn ? "is-active" : ""}`}
+              disabled={!media}
+              aria-pressed={compareOn}
+              onClick={toggleCompare}
+            >
+              {compareOn ? "返回样张" : "对比原图"}
             </button>
             {isVideo && (
               <button
@@ -1792,8 +2229,61 @@ export default function AsciiStudio() {
             </div>
           )}
           <p className="output-note">
-            亮度类通道为每个字符独立计算灰度（前景亮度 / 背景+前景双通道）；复制与 TXT 为密度版文本，PNG 与 MP4 按当前通道渲染。导出由内置 FFmpeg 先本地解码全部画面帧（制版），再按原帧率编码为 H.264 MP4（成片，含原声，零丢帧）。
+            亮度类通道为每个字符独立计算灰度（前景亮度 / 背景+前景双通道）；复制与 TXT 为密度版文本，PNG 与 MP4 按当前通道渲染并盖上落款。
+            样张上滚轮可放大检视、按住拖动平移、双击复位。存 PNG 可拖到桌面直接保存，精度由「成作精度」决定。
+            导出由内置 FFmpeg 先本地解码全部画面帧（制版），再按原帧率编码为 H.264 MP4（成片，含原声，零丢帧）。
           </p>
+        </div>
+
+        <div className="studio-panel archive-panel">
+          <div className="archive-head">
+            <h2 className="section-title">样张档案</h2>
+            {archive.length > 0 && (
+              <button type="button" className="archive-clear" onClick={() => updateArchive(() => [])}>
+                清空档案
+              </button>
+            )}
+          </div>
+          {archive.length === 0 ? (
+            <p className="archive-empty">
+              还没有样张。每次「盖印打样」都会在这里留一张版次卡，点击即可复原当时的全部参数。
+            </p>
+          ) : (
+            <div className="archive-row">
+              {archive.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="archive-card"
+                  role="button"
+                  tabIndex={0}
+                  title={`第 ${entry.edition} 版 · ${entry.mediaName} · 点击复原参数`}
+                  onClick={() => restoreEntry(entry)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      restoreEntry(entry);
+                    }
+                  }}
+                >
+                  <img src={entry.thumb} alt={`第 ${entry.edition} 版`} />
+                  <span className="archive-meta">
+                    第 {entry.edition} 版 · {entry.options.columns} 列 · {entry.channel === "density" ? "密度" : entry.channel === "dual" ? "双通道" : "亮度"}
+                  </span>
+                  <button
+                    type="button"
+                    className="archive-del"
+                    aria-label={`删除第 ${entry.edition} 版`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      updateArchive((previous) => previous.filter((item) => item.id !== entry.id));
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 

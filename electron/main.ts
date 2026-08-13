@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { decodeImage, ensureTools, extractFrame, ffmpegExe, probeMedia } from "./media";
-import type { CliTask, ExportStartRequest, ProbeResult } from "../src/shared/ipc";
+import type { CliTask, ExportStartRequest, ProbeResult, SignatureOptions } from "../src/shared/ipc";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -51,6 +51,7 @@ interface ExportSession {
 }
 
 const sessions = new Map<string, ExportSession>();
+const dragTempFiles = new Set<string>();
 
 let mainWindow: BrowserWindow | null = null;
 let cliTaskValue: CliTask | null = null;
@@ -83,6 +84,8 @@ interface ParsedArgs {
   input: string | null;
   output: string | null;
   options: CliTask["options"];
+  signature: SignatureOptions;
+  scale: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -145,6 +148,15 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (cli && input && !fs.existsSync(path.resolve(input))) {
     cliError = `输入文件不存在：${input}`;
   }
+  const sealText = map.get("seal") ?? null;
+  const colophon = map.get("colophon") ?? null;
+  const signature: SignatureOptions = {
+    enabled: Boolean(sealText ?? colophon),
+    sealText: sealText ?? "工",
+    colophon: colophon ?? "GLYPHWORKS",
+  };
+  const rawScale = Number(map.get("scale") ?? "1");
+  const scale = [1, 2, 4].includes(rawScale) ? rawScale : 1;
   return {
     smoke,
     cli,
@@ -153,6 +165,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     input: input ? path.resolve(input) : null,
     output: output ? path.resolve(output) : null,
     options,
+    signature,
+    scale,
   };
 }
 
@@ -585,6 +599,27 @@ function registerIpc(): void {
   ipcMain.on("app:show-item", (_event, filePath: string) => {
     shell.showItemInFolder(filePath);
   });
+
+  ipcMain.handle("app:mark-recent", (_event, filePath: string) => {
+    if (fs.existsSync(filePath)) app.addRecentDocument(filePath);
+  });
+
+  ipcMain.handle("app:clear-recent", () => {
+    app.clearRecentDocuments();
+  });
+
+  ipcMain.handle("app:save-temp", async (_event, data: ArrayBuffer, name: string) => {
+    const filePath = path.join(os.tmpdir(), `glyphworks-drag-${randomUUID()}-${path.basename(name)}`);
+    await fsp.writeFile(filePath, Buffer.from(data));
+    dragTempFiles.add(filePath);
+    return filePath;
+  });
+
+  ipcMain.handle("app:start-drag", (_event, filePath: string) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.startDrag({ file: filePath, icon: filePath });
+    }
+  });
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -654,6 +689,8 @@ if (!gotSingleInstanceLock) {
         input: parsed.input,
         output: parsed.output ?? (await defaultOutputFor(probe, parsed.input)),
         options: parsed.options,
+        signature: parsed.signature,
+        scale: parsed.scale,
       };
     }
 
@@ -786,6 +823,35 @@ if (!gotSingleInstanceLock) {
               );
               console.log(`SHOT DIAG ${diag}`);
               await capture("studio-working");
+              const stamped = await window.webContents.executeJavaScript(
+                `(() => { const b = document.querySelector(".seal-button"); if (b && !b.disabled) { b.click(); return true; } return false; })()`,
+              );
+              if (stamped) {
+                await new Promise((resolve) => setTimeout(resolve, 1400));
+                const diag2 = await window.webContents.executeJavaScript(
+                  `(() => {
+                    const archive = JSON.parse(localStorage.getItem("glyphworks.archive.v1") ?? "[]");
+                    return JSON.stringify({
+                      archiveLen: archive.length,
+                      cards: document.querySelectorAll(".archive-card").length,
+                      stats: document.querySelector(".output-stats")?.textContent ?? null,
+                    });
+                  })()`,
+                );
+                console.log(`SHOT DIAG2 ${diag2}`);
+                await capture("studio-stamped");
+              }
+              const compareClicked = await window.webContents.executeJavaScript(
+                `(() => { const b = [...document.querySelectorAll("button")].find((el) => el.textContent?.includes("对比原图")); if (b && !b.disabled) { b.click(); return true; } return false; })()`,
+              );
+              if (compareClicked) {
+                await new Promise((resolve) => setTimeout(resolve, 600));
+                const diag3 = await window.webContents.executeJavaScript(
+                  `(() => JSON.stringify({ overlay: Boolean(document.querySelector(".compare-overlay")), img: Boolean(document.querySelector(".compare-overlay img")) }))()`,
+                );
+                console.log(`SHOT DIAG3 ${diag3}`);
+                await capture("studio-compare");
+              }
             }
             console.log(`SHOT OK ${base}`);
             app.exit(0);
@@ -808,6 +874,9 @@ if (!gotSingleInstanceLock) {
       session.decodeProc?.kill();
       session.encodeProc?.kill();
       void cleanupTemp(session);
+    }
+    for (const filePath of dragTempFiles) {
+      void fsp.rm(filePath, { force: true }).catch(() => undefined);
     }
   });
 }

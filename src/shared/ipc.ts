@@ -52,10 +52,22 @@ export interface CliOptions {
   channel: "density" | "luminance" | "dual";
 }
 
+/** 落款与钤印:盖在样张、PNG 与 MP4 每一帧上。 */
+export interface SignatureOptions {
+  enabled: boolean;
+  /** 印章文字,1–4 字,朱砂方印竖排。 */
+  sealText: string;
+  /** 题款文本,画在左下缘。 */
+  colophon: string;
+}
+
 export interface CliTask {
   input: string;
   output: string;
   options: CliOptions;
+  signature?: SignatureOptions;
+  /** PNG 成作精度:1 / 2 / 4。 */
+  scale?: number;
 }
 
 export interface AppApi {
@@ -80,6 +92,10 @@ export interface AppApi {
   cliTask(): Promise<CliTask | null>;
   cliDone(code: number, message?: string): void;
   showItemInFolder(path: string): void;
+  markRecent(path: string): Promise<void>;
+  clearRecent(): Promise<void>;
+  saveTemp(data: ArrayBuffer, name: string): Promise<string>;
+  startDrag(filePath: string): Promise<void>;
 }
 
 declare global {

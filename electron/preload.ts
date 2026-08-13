@@ -48,6 +48,10 @@ const api: AppApi = {
   cliTask: () => ipcRenderer.invoke("app:cli-task") as Promise<CliTask | null>,
   cliDone: (code, message) => ipcRenderer.send("app:cli-done", code, message),
   showItemInFolder: (filePath) => ipcRenderer.send("app:show-item", filePath),
+  markRecent: (filePath) => ipcRenderer.invoke("app:mark-recent", filePath) as Promise<void>,
+  clearRecent: () => ipcRenderer.invoke("app:clear-recent") as Promise<void>,
+  saveTemp: (data, name) => ipcRenderer.invoke("app:save-temp", data, name) as Promise<string>,
+  startDrag: (filePath) => ipcRenderer.invoke("app:start-drag", filePath) as Promise<void>,
 };
 
 contextBridge.exposeInMainWorld("app", api);

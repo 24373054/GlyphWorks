@@ -14,6 +14,7 @@
 - 内置 FFmpeg 支持浏览器解不了的格式：MKV / MOV / AVI / WMV / HEVC 视频，TIFF / HEIC 图片。
 - Windows 集成：原生打开/另存为对话框、文件关联（右键“打开方式”）、拖文件到程序图标、单实例、无界面 CLI。
 - 1.1.0「版画工坊」界面：黑木工作台 + 纸样打样 + 朱砂印；六套策展预设、盖印揭示动画、样张角线与铭牌、首启示例、键盘快捷键、导出进度条。
+- 1.2.0「从打样到成作」：落款钤印（自定义印章字与题款，覆盖预览 / PNG / MP4 / CLI）；PNG 成作精度 1×/2×/4×（像素上限保护）；样张档案（版次卡一键复原参数）；放大检视与原图对比；最近文件（含 Windows 跳转列表）；拖出保存。
 
 ## 运行与安装
 
@@ -24,7 +25,7 @@ npm install
 npm run dev
 ```
 
-构建与打包（产物为**单一安装包** `dist\GlyphWorks-1.1.0-Setup.exe`，内置 Electron 与 FFmpeg，用户无需另装任何东西）：
+构建与打包（产物为**单一安装包** `dist\GlyphWorks-1.2.0-Setup.exe`，内置 Electron 与 FFmpeg，用户无需另装任何东西）：
 
 ```powershell
 npm run dist
@@ -46,7 +47,7 @@ GlyphWorks.exe --cli --input in.mp4 --output out.mp4 --channel dual --theme ligh
 GlyphWorks.exe --cli --input in.tiff --output out.png --half-block
 ```
 
-参数：`--input`、`--output`（默认 `<输入名>-ascii.txt|.mp4`）、`--columns 40–480`、`--ramp classic|block|simple`、`--contrast 0.5–2`、`--dither none|floyd|bayer`、`--theme dark|light`、`--channel density|luminance|dual`、`--half-block`、`--invert`。
+参数：`--input`、`--output`（默认 `<输入名>-ascii.txt|.mp4`）、`--columns 40–480`、`--ramp classic|block|simple`、`--contrast 0.5–2`、`--dither none|floyd|bayer`、`--theme dark|light`、`--channel density|luminance|dual`、`--half-block`、`--invert`、`--seal <印章字 1–4>`、`--colophon <题款>`、`--scale 1|2|4`（PNG 成作精度）。
 输出格式由 `--output` 扩展名决定：`.txt` / `.png` / `.mp4`。
 
 ## 支持的格式

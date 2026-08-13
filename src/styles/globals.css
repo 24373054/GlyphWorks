@@ -905,6 +905,243 @@ button {
 }
 
 /* ------------------------------------------------------------
+   1.2.0:落款表单 / 最近图档 / 放大检视 / 原图对比 / 样张档案
+   ------------------------------------------------------------ */
+
+.signature-block {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+}
+
+.field input[type="text"].text-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--bench-deep);
+  color: var(--paper-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.text-input::placeholder {
+  color: rgba(156, 144, 119, 0.55);
+}
+
+.recent {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.recent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recent-title {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+}
+
+.recent-clear,
+.archive-clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brass);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.recent-list {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-list button {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.recent-list button:hover {
+  border-color: var(--line-strong);
+  color: var(--paper-bright);
+}
+
+.zoom-chip {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  background: rgba(16, 13, 10, 0.82);
+  color: var(--brass);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+.proof-print canvas {
+  transform-origin: center center;
+}
+
+.compare-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bench-deep);
+  cursor: pointer;
+}
+
+.compare-overlay img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.compare-tag {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border: 1px solid var(--line-strong);
+  background: rgba(16, 13, 10, 0.82);
+  color: var(--brass);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  pointer-events: none;
+}
+
+.compare-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.action-button.is-active {
+  border-color: var(--cinnabar);
+  background: var(--cinnabar-dim);
+  color: var(--paper-bright);
+}
+
+.action-button.drag-png {
+  cursor: grab;
+}
+
+.action-button.drag-png:active {
+  cursor: grabbing;
+}
+
+.archive-panel {
+  grid-column: 1 / -1;
+  padding: 20px 22px 22px;
+}
+
+.archive-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.archive-empty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.archive-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+}
+
+.archive-card {
+  position: relative;
+  flex: 0 0 auto;
+  width: 132px;
+  padding: 8px 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.16s ease;
+}
+
+.archive-card:hover,
+.archive-card:focus-visible {
+  border-color: var(--brass);
+  transform: translateY(-2px);
+}
+
+.archive-card img {
+  display: block;
+  width: 100%;
+  height: 74px;
+  object-fit: contain;
+  background: var(--bench-deep);
+}
+
+.archive-meta {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-del {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: rgba(16, 13, 10, 0.7);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.archive-del:hover {
+  border-color: var(--cinnabar);
+  color: var(--paper-bright);
+}
+
+/* ------------------------------------------------------------
    响应式与动效降级
    ------------------------------------------------------------ */
 
