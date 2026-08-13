@@ -8,7 +8,12 @@ Set-Location $root
 
 Write-Host "== eslint ==" -ForegroundColor Cyan
 node node_modules\eslint\bin\eslint.js .
-if ($LASTEXITCODE -ne 0) { throw "eslint failed" }
+if ($LASTEXITCODE -ne 0) {
+  # 内存紧张时 Node 偶发 OOM 崩溃，重试一次
+  Write-Host "eslint failed once (exit $LASTEXITCODE), retrying..." -ForegroundColor DarkYellow
+  node node_modules\eslint\bin\eslint.js .
+  if ($LASTEXITCODE -ne 0) { throw "eslint failed" }
+}
 
 Write-Host "== typecheck (node + web) ==" -ForegroundColor Cyan
 node node_modules\typescript\bin\tsc --noEmit -p tsconfig.node.json

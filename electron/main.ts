@@ -45,6 +45,7 @@ interface ExportSession {
   encodeProc: ChildProcess | null;
   decodeExitCode: number | null;
   decodeError: string;
+  encodeError: string;
   canceled: boolean;
   decodeDone: Promise<void>;
 }
@@ -252,19 +253,20 @@ function sendProgress(session: ExportSession, phase: "decode" | "render" | "enco
 }
 
 function spawnDecode(session: ExportSession, columns: number, sampleRows: number): ChildProcess {
+  const args = [
+    "-hide_banner",
+    "-loglevel", "error",
+    "-i", session.sourcePath,
+    "-map", "0:v:0",
+    "-vf", `scale=${columns}:${sampleRows}:flags=lanczos,format=rgb24`,
+    "-c:v", "rawvideo",
+    "-f", "image2",
+    "-start_number", "0",
+    "frame_%06d.rgb",
+  ];
   return spawn(
     ffmpegExe(),
-    [
-      "-hide_banner",
-      "-loglevel", "error",
-      "-i", session.sourcePath,
-      "-map", "0:v:0",
-      "-vf", `scale=${columns}:${sampleRows}:flags=lanczos,format=rgb24`,
-      "-c:v", "rawvideo",
-      "-f", "image2",
-      "-start_number", "0",
-      "frame_%06d.rgb",
-    ],
+    args,
     { cwd: session.tempDir, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
   );
 }
@@ -294,7 +296,7 @@ function runEncode(session: ExportSession, withAudio: boolean): Promise<number |
           "-map", "0:v:0",
           "-map", "1:a?",
           "-c:v", "libx264",
-          "-preset", "slow",
+          "-preset", "medium",
           "-crf", "16",
           "-pix_fmt", "yuv420p",
           "-r", String(session.fps),
@@ -308,7 +310,7 @@ function runEncode(session: ExportSession, withAudio: boolean): Promise<number |
           ...base,
           "-map", "0:v:0",
           "-c:v", "libx264",
-          "-preset", "slow",
+          "-preset", "medium",
           "-crf", "16",
           "-pix_fmt", "yuv420p",
           "-r", String(session.fps),
@@ -339,7 +341,7 @@ function runEncode(session: ExportSession, withAudio: boolean): Promise<number |
     child.on("error", reject);
     child.on("close", (code) => {
       session.encodeProc = null;
-      session.decodeError = tail.join("\n");
+      session.encodeError = tail.join("\n");
       resolve(code);
     });
   });
@@ -450,6 +452,7 @@ function registerIpc(): void {
       encodeProc: null,
       decodeExitCode: null,
       decodeError: "",
+      encodeError: "",
       canceled: false,
       decodeDone: Promise.resolve(),
     };
@@ -525,9 +528,20 @@ function registerIpc(): void {
       }
     }
     if (code !== 0) {
+      let frameFiles = 0;
+      try {
+        frameFiles = (await fsp.readdir(session.tempDir)).filter((name) => name.endsWith(".jpg")).length;
+      } catch {
+        frameFiles = -1;
+      }
       await Promise.all([cleanupTemp(session), removeOutput(session)]);
       sessions.delete(sessionId);
-      return { ok: false, error: `ffmpeg 编码失败（退出码 ${code}）：${session.decodeError.slice(-800)}` };
+      const log = session.encodeError;
+      const detail =
+        log.length > 1200
+          ? `${log.slice(0, 500)}\n…（中间省略）…\n${log.slice(-500)}`
+          : log;
+      return { ok: false, error: `ffmpeg 编码失败（退出码 ${code}，临时帧文件数 ${frameFiles}）：${detail}` };
     }
     let stat: { size: number } | null = null;
     try {

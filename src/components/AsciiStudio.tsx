@@ -355,8 +355,16 @@ function makeExportCanvas(
   const charWidth = Math.max(probe.measureText("M").width, 1);
   const lineHeight = 12 * 1.22;
   const toEven = (value: number) => (value % 2 === 0 ? value : value + 1);
-  const width = toEven(Math.ceil(charWidth * columns) + 8);
-  const height = toEven(Math.ceil(lineHeight * textRows) + 8);
+  let width = toEven(Math.ceil(charWidth * columns) + 8);
+  let height = toEven(Math.ceil(lineHeight * textRows) + 8);
+  // 大画布会让 x264 在内存紧张的机器上分配失败：把最长边限制到 1920，
+  // 字符按目标画布等比缩小，输出不受影响。
+  const MAX_DIMENSION = 1920;
+  const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
+  if (scale < 1) {
+    width = toEven(Math.max(2, Math.round(width * scale)));
+    height = toEven(Math.max(2, Math.round(height * scale)));
+  }
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
