@@ -21,6 +21,7 @@ import {
   type RampId,
 } from "@/lib/ascii";
 import TestPattern from "./TestPattern";
+import { demoWoodcut } from "@/lib/demo";
 import type { CliTask, ProbeResult } from "@/shared/ipc";
 
 type MediaKind = "image" | "video";
@@ -51,6 +52,46 @@ const DEFAULT_OPTIONS: AsciiOptions = {
   theme: "dark",
 };
 
+interface Preset {
+  name: string;
+  channel: ChannelMode;
+  options: Partial<AsciiOptions>;
+}
+
+/** 策展预设:像选刻刀一样选一套参数。 */
+const PRESETS: Preset[] = [
+  {
+    name: "报版印刷",
+    channel: "density",
+    options: { columns: 96, ramp: "classic", contrast: 1.05, dither: "floyd", theme: "light", halfBlock: false, invert: false },
+  },
+  {
+    name: "暗房磷光",
+    channel: "density",
+    options: { columns: 110, ramp: "classic", contrast: 1.15, dither: "floyd", theme: "dark", halfBlock: false, invert: false },
+  },
+  {
+    name: "蓝图晒印",
+    channel: "dual",
+    options: { columns: 120, ramp: "block", contrast: 1.05, dither: "none", theme: "light", halfBlock: false, invert: false },
+  },
+  {
+    name: "木刻拓片",
+    channel: "density",
+    options: { columns: 80, ramp: "block", contrast: 1.6, dither: "bayer", theme: "dark", halfBlock: false, invert: false },
+  },
+  {
+    name: "电报窄带",
+    channel: "density",
+    options: { columns: 56, ramp: "simple", contrast: 1.3, dither: "none", theme: "dark", halfBlock: false, invert: false },
+  },
+  {
+    name: "绢本细密",
+    channel: "dual",
+    options: { columns: 200, ramp: "classic", contrast: 0.9, dither: "floyd", theme: "dark", halfBlock: false, invert: false },
+  },
+];
+
 const IMAGE_EXTS = [
   "png", "jpg", "jpeg", "webp", "gif", "avif", "bmp", "svg", "tif", "tiff", "heic", "heif",
 ];
@@ -60,14 +101,14 @@ const clampColumns = (value: number, live: boolean) =>
 
 function themeColors(theme: OutputTheme) {
   return theme === "dark"
-    ? { bg: "#0b0e0a", fg: "#c6e88a" }
-    : { bg: "#f1ecdd", fg: "#1b2119" };
+    ? { bg: "#0d0b08", fg: "#c6e88a" }
+    : { bg: "#e9e0cd", fg: "#241f18" };
 }
 
 function themeAnchors(theme: OutputTheme) {
   return theme === "dark"
-    ? { darkest: "#0b0e0a", brightest: "#c6e88a" }
-    : { darkest: "#1b2119", brightest: "#f1ecdd" };
+    ? { darkest: "#0d0b08", brightest: "#c6e88a" }
+    : { darkest: "#241f18", brightest: "#e9e0cd" };
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -461,6 +502,9 @@ export default function AsciiStudio() {
   const [dirty, setDirty] = useState(false);
   const [renderVersion, setRenderVersion] = useState(0);
   const [cliTask, setCliTask] = useState<CliTask | null>(null);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [proofNumber, setProofNumber] = useState(0);
+  const [appliedTheme, setAppliedTheme] = useState<OutputTheme>("dark");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -483,9 +527,12 @@ export default function AsciiStudio() {
   const nativeFrameSeqRef = useRef(0);
   const nativeFrameTimerRef = useRef<number | null>(null);
   const cliStartedRef = useRef(false);
+  const proofPrintRef = useRef<HTMLDivElement>(null);
+  const revealRef = useRef(false);
 
   const setOption = useCallback(
     <K extends keyof AsciiOptions>(key: K, value: AsciiOptions[K]) => {
+      setActivePreset(null);
       setOptions((previous) => ({ ...previous, [key]: value }));
       if (live) {
         appliedRef.current = { options: { ...options, [key]: value }, channel };
@@ -496,6 +543,13 @@ export default function AsciiStudio() {
     },
     [live, options, channel],
   );
+
+  const applyPreset = useCallback((preset: Preset) => {
+    setOptions((previous) => ({ ...previous, ...preset.options }));
+    setChannel(preset.channel);
+    setActivePreset(preset.name);
+    setDirty(true);
+  }, []);
 
   const resetMediaState = useCallback(
     (next: {
@@ -540,10 +594,34 @@ export default function AsciiStudio() {
         nativeFrameUrlRef.current = null;
       }
       appliedRef.current = { options, channel };
+      setActivePreset(null);
       setDirty(false);
+      revealRef.current = true;
     },
     [options, channel],
   );
+
+  const loadDemo = useCallback(() => {
+    const dataUrl = demoWoodcut();
+    resetMediaState({
+      kind: "image",
+      url: dataUrl,
+      name: "示例 · 木版山水",
+      path: null,
+      native: false,
+      probe: {
+        ok: true,
+        kind: "image",
+        width: 0,
+        height: 0,
+        duration: null,
+        fps: null,
+        hasAudio: false,
+        formatName: "demo",
+        codecName: "",
+      },
+    });
+  }, [resetMediaState]);
 
   const loadPath = useCallback(
     async (filePath: string, knownProbe?: ProbeResult) => {
@@ -835,6 +913,16 @@ export default function AsciiStudio() {
       }
       setOutput(converted);
       setGeneratedMs(Math.max(1, Math.round(performance.now() - started)));
+      setAppliedTheme(appliedOptions.theme);
+      if (revealRef.current) {
+        revealRef.current = false;
+        const printEl = proofPrintRef.current;
+        if (printEl && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          printEl.classList.remove("is-printing");
+          void printEl.offsetWidth;
+          printEl.classList.add("is-printing");
+        }
+      }
     } catch (renderError) {
       setError(`渲染失败：${String(renderError).slice(0, 400)}`);
     }
@@ -919,11 +1007,14 @@ export default function AsciiStudio() {
   const applyParams = useCallback(() => {
     appliedRef.current = { options, channel };
     setDirty(false);
+    revealRef.current = true;
+    setProofNumber((value) => value + 1);
     setRenderVersion((value) => value + 1);
   }, [options, channel]);
 
   const changeChannel = useCallback(
     (next: ChannelMode) => {
+      setActivePreset(null);
       setChannel(next);
       appliedRef.current = { options, channel: next };
       setDirty(false);
@@ -1206,6 +1297,40 @@ export default function AsciiStudio() {
     });
   }, [loadPath]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod) return;
+      const key = event.key.toLowerCase();
+      if (key === "o") {
+        event.preventDefault();
+        void openFromDialog();
+      } else if (key === "enter") {
+        if (media && !(media.kind === "video" && live)) {
+          event.preventDefault();
+          applyParams();
+        }
+      } else if (key === "c") {
+        if (output && !live) {
+          event.preventDefault();
+          void copyText();
+        }
+      } else if (key === "s") {
+        if (event.shiftKey) {
+          if (media) {
+            event.preventDefault();
+            void downloadPng();
+          }
+        } else if (output || live) {
+          event.preventDefault();
+          void downloadTxt();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [media, output, live, openFromDialog, applyParams, copyText, downloadTxt, downloadPng]);
+
   const isVideo = media?.kind === "video";
   const videoDuration = isVideo
     ? media.native
@@ -1225,19 +1350,19 @@ export default function AsciiStudio() {
     <>
       <header className="studio-header">
         <div className="studio-header-inner">
-          <span className="brand-mark">▚▞</span>
-          <span className="brand-name">字符工坊 · GLYPH WORKS — WINDOWS</span>
-          <span className="header-note">本地转换 · 内置 FFmpeg · 文件不上传</span>
+          <span className="brand-seal" aria-hidden="true">字符工坊</span>
+          <span className="brand-name">Glyph Works <em>·</em> Windows 版画台</span>
+          <span className="header-note">本地制版 · 图档不出本机</span>
         </div>
       </header>
 
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow">IMAGE &amp; VIDEO TO CHARACTER PRINT</p>
-          <h1>把图片与视频，打印成字符画<span className="cursor-block" aria-hidden="true">▊</span></h1>
+          <h1>把图片与视频，压印成字符画<span className="cursor-block" aria-hidden="true">▊</span></h1>
           <p className="lede">
-            拖入图片或视频，字符画即刻在右侧打印。调整列数、字符集、对比度与抖动，
-            一键复制文本，或保存 TXT、PNG 与 MP4。
+            拖入图片或视频，字符画即刻上版打印。调整列数、字符集、对比度与抖动，
+            盖印打样，或保存 TXT、PNG 与 MP4。
           </p>
           <ul className="hero-facts">
             <li><b>图片</b> PNG · JPG · WebP · GIF · AVIF · SVG · TIFF · HEIC</li>
@@ -1246,8 +1371,13 @@ export default function AsciiStudio() {
           </ul>
           <div className="hero-actions">
             <button type="button" className="action-button" onClick={() => void openFromDialog()}>
-              打开文件（系统对话框）
+              打开图档（系统对话框）
             </button>
+            {!media && (
+              <button type="button" className="action-button" onClick={loadDemo}>
+                试印示例 · 木版山水
+              </button>
+            )}
             <span className="hero-actions-hint">也可把文件拖到本窗口或程序图标上</span>
           </div>
         </div>
@@ -1280,12 +1410,12 @@ export default function AsciiStudio() {
             {media ? (
               <>
                 <span className="drop-file-name">{media.name}</span>
-                <span className="drop-hint">已就绪 · 点击可换一个文件</span>
+                <span className="drop-hint">已上版 · 点击可换一张图档</span>
               </>
             ) : (
               <>
-                <span className="drop-main">拖入图片或视频</span>
-                <span className="drop-hint">或点击选择文件 · 松开即打印</span>
+                <span className="drop-main">把图档拖到这里</span>
+                <span className="drop-hint">或点击选稿 · 松开即上版</span>
               </>
             )}
           </div>
@@ -1311,68 +1441,72 @@ export default function AsciiStudio() {
 
       <section className="studio">
         <div className="studio-panel controls-panel">
-          <h2 className="panel-title">01 · 输入与参数</h2>
+          <section className="panel-section">
+            <h2 className="section-title"><span className="step-no">①</span>选稿 · 图档</h2>
 
-          {media ? (
-            <div className="media-preview" style={{ aspectRatio: mediaRatio }}>
-              {media.kind === "image" || media.native ? (
-                <img
-                  ref={imageRef}
-                  src={media.kind === "video" ? (media.frameUrl ?? "") : media.url}
-                  crossOrigin="anonymous"
-                  alt=""
-                  className="media-preview-image"
-                  onLoad={(event) => {
-                    const target = event.currentTarget;
-                    setDims({ width: target.naturalWidth, height: target.naturalHeight });
-                  }}
-                  onError={() => {
-                    if (media.kind === "image" && !media.native) {
-                      void activateNativeImage();
-                    } else {
-                      setError("这张图片无法解码，请换用 PNG / JPG / WebP 等常见格式。");
-                    }
-                  }}
-                />
-              ) : (
-                <video
-                  ref={videoRef}
-                  src={media.url}
-                  crossOrigin="anonymous"
-                  muted
-                  playsInline
-                  preload="metadata"
-                  poster={posterUrl ?? undefined}
-                  className="media-preview-video"
-                  onLoadedMetadata={(event) => {
-                    const target = event.currentTarget;
-                    setDims({ width: target.videoWidth, height: target.videoHeight });
-                    target.currentTime = 0;
-                  }}
-                  onSeeked={() => {
-                    setFrameVersion((value) => value + 1);
-                    makePoster();
-                  }}
-                  onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
-                  onError={() => void activateNativeVideo()}
-                />
-              )}
-              <div className="media-meta">
-                <span>{media.name}</span>
-                {dims && <span>{dims.width} × {dims.height}</span>}
-                {nativeBusy && <span>解码中…</span>}
+            {media ? (
+              <div className="media-preview" style={{ aspectRatio: mediaRatio }}>
+                {media.kind === "image" || media.native ? (
+                  <img
+                    ref={imageRef}
+                    src={media.kind === "video" ? (media.frameUrl ?? "") : media.url}
+                    crossOrigin="anonymous"
+                    alt=""
+                    className="media-preview-image"
+                    onLoad={(event) => {
+                      const target = event.currentTarget;
+                      setDims({ width: target.naturalWidth, height: target.naturalHeight });
+                    }}
+                    onError={() => {
+                      if (media.kind === "image" && !media.native) {
+                        void activateNativeImage();
+                      } else {
+                        setError("这张图片无法解码，请换用 PNG / JPG / WebP 等常见格式。");
+                      }
+                    }}
+                  />
+                ) : (
+                  <video
+                    ref={videoRef}
+                    src={media.url}
+                    crossOrigin="anonymous"
+                    muted
+                    playsInline
+                    preload="metadata"
+                    poster={posterUrl ?? undefined}
+                    className="media-preview-video"
+                    onLoadedMetadata={(event) => {
+                      const target = event.currentTarget;
+                      setDims({ width: target.videoWidth, height: target.videoHeight });
+                      target.currentTime = 0;
+                    }}
+                    onSeeked={() => {
+                      setFrameVersion((value) => value + 1);
+                      makePoster();
+                    }}
+                    onPlay={() => setPlaying(true)}
+                    onPause={() => setPlaying(false)}
+                    onError={() => void activateNativeVideo()}
+                  />
+                )}
+                <div className="media-meta">
+                  <span>{media.name}</span>
+                  {dims && <span>{dims.width} × {dims.height}</span>}
+                  {nativeBusy && <span>解码中…</span>}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="panel-empty">
-              <p>还没有输入文件。</p>
-              <p>拖一张图或一段视频到左侧大框，或点击「打开文件」。</p>
-            </div>
-          )}
+            ) : (
+              <div className="panel-empty">
+                <p>工作台还空着。</p>
+                <p>拖一张图或一段视频到选稿区，或点「打开图档」。</p>
+                <button type="button" className="action-button" onClick={loadDemo}>
+                  试印示例 · 木版山水
+                </button>
+              </div>
+            )}
 
-          {isVideo && media && (
-            <div className="video-controls">
+            {isVideo && media && (
+              <div className="video-controls">
               {!media.native && (
                 <div className="segmented">
                   <button
@@ -1428,10 +1562,28 @@ export default function AsciiStudio() {
                   浏览器无法直接解码此格式：预览帧与视频导出由内置 FFmpeg 完成，实时打印不可用。
                 </p>
               )}
-            </div>
-          )}
+              </div>
+            )}
+          </section>
 
-          <div className="settings">
+          <section className="panel-section">
+            <h2 className="section-title"><span className="step-no">②</span>雕版 · 参数</h2>
+
+            <div className="presets" aria-label="预设参数">
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  className={`preset-chip ${activePreset === preset.name ? "is-active" : ""}`}
+                  onClick={() => applyPreset(preset)}
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+            <p className="presets-note">选一套刀法，再微调；盖印前不会生效。</p>
+
+            <div className="settings">
             <label className="field">
               <span>细腻度（列数）<em>{options.columns}</em></span>
               <input
@@ -1493,8 +1645,8 @@ export default function AsciiStudio() {
                 value={options.theme}
                 onChange={(event) => setOption("theme", event.target.value as OutputTheme)}
               >
-                <option value="dark">深色终端 · 磷光字符</option>
-                <option value="light">浅色纸张 · 墨字</option>
+                <option value="dark">深色磷光 · 暗房打样</option>
+                <option value="light">浅色墨纸 · 纸样打样</option>
               </select>
             </label>
             <div className="field-row">
@@ -1517,19 +1669,20 @@ export default function AsciiStudio() {
               </label>
             </div>
           </div>
+          </section>
 
           {!(isVideo && live) && (
             <div className="apply-row">
               <button
                 type="button"
-                className={`apply-button ${dirty ? "is-dirty" : ""}`}
+                className={`seal-button ${dirty ? "is-dirty" : ""}`}
                 disabled={!media}
                 onClick={applyParams}
               >
-                应用参数
+                盖印打样
               </button>
               <span className={`apply-hint ${dirty ? "is-visible" : ""}`}>
-                {dirty ? "参数已修改，点击应用生效" : "参数调整后需点击应用"}
+                {dirty ? "参数已改，待盖印" : "调整后盖印生效"}
               </span>
             </div>
           )}
@@ -1537,23 +1690,44 @@ export default function AsciiStudio() {
 
         <div className="studio-panel output-panel">
           <div className="output-head">
-            <h2 className="panel-title">02 · 字符输出</h2>
-            <span className="output-stats">
-              {output
-                ? `${outputColumns} × ${outputRows} · ${outputColumns * outputRows} 字符 · ${generatedMs} ms`
-                : "等待输入"}
-            </span>
+            <h2 className="section-title"><span className="step-no">③</span>打样 · 样张</h2>
           </div>
-          <div className="output-stage" ref={liveStageRef} style={{ aspectRatio: mediaRatio }}>
-            {live && isVideo && !media.native ? (
-              <canvas ref={liveCanvasRef} className="bitmap-canvas" />
-            ) : output ? (
-              <canvas ref={bitmapCanvasRef} className="bitmap-canvas" />
+          <div className="proof-sheet" ref={liveStageRef} style={{ aspectRatio: mediaRatio }}>
+            {media ? (
+              <>
+                <div className="proof-mat" data-theme={live && isVideo ? options.theme : appliedTheme}>
+                  <span className="reg-mark reg-top" aria-hidden="true">+</span>
+                  <span className="reg-mark reg-bottom" aria-hidden="true">+</span>
+                  <div className="proof-print" ref={proofPrintRef}>
+                    {live && isVideo && !media.native ? (
+                      <canvas ref={liveCanvasRef} className="bitmap-canvas" />
+                    ) : (
+                      <canvas ref={bitmapCanvasRef} className="bitmap-canvas" />
+                    )}
+                  </div>
+                </div>
+                <div className="proof-colophon">
+                  <span className="proof-edition">打样 · 第 {proofNumber} 版</span>
+                  <span className="output-stats">
+                    {output
+                      ? `${outputColumns} × ${outputRows} · ${outputColumns * outputRows} 字符 · ${generatedMs} ms`
+                      : "等待上版"}
+                  </span>
+                </div>
+                {!output && !(live && isVideo && !media.native) && (
+                  <div className="proof-overlay" aria-hidden="true">
+                    <p>正在上版…</p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="output-placeholder" aria-live="polite">
-                <p>· 等待输入 ·</p>
-                <p>拖入一张图片或一段视频，字符画会在这里打印。</p>
-                <p className="output-placeholder-sub">调整参数后点击「应用参数」生效</p>
+                <p>工作台还空着。</p>
+                <p>拖入一张图或一段视频，第一版打样即刻印出。</p>
+                <span className="output-stats" hidden>等待上版</span>
+                <button type="button" className="action-button" onClick={loadDemo}>
+                  试印示例 · 木版山水
+                </button>
               </div>
             )}
           </div>
@@ -1562,10 +1736,10 @@ export default function AsciiStudio() {
               {copied ? "已复制" : "复制字符"}
             </button>
             <button type="button" className="action-button" disabled={!output && !live} onClick={() => void downloadTxt()}>
-              保存 .txt
+              存 TXT
             </button>
             <button type="button" className="action-button" disabled={!output && !live} onClick={() => void downloadPng()}>
-              保存 .png
+              存 PNG
             </button>
             {isVideo && (
               <button
@@ -1574,13 +1748,7 @@ export default function AsciiStudio() {
                 disabled={(!output && !live) || Boolean(exporting?.active)}
                 onClick={() => void exportVideo()}
               >
-                {exporting?.active
-                  ? exporting.phase === "decode"
-                    ? `解码帧…`
-                    : exporting.phase === "render"
-                      ? `预渲染 ${Math.round((exporting.progress ?? 0) * 100)}%`
-                      : `编码中 ${Math.round((exporting.progress ?? 0) * 100)}%`
-                  : "导出 .mp4（原帧率）"}
+                {exporting?.active ? "正在导出…" : "导出 MP4（原帧率）"}
               </button>
             )}
             {exporting?.active && (
@@ -1597,17 +1765,51 @@ export default function AsciiStudio() {
               </button>
             )}
           </div>
+          {exporting?.active && (
+            <div
+              className="export-bar"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round((exporting.progress ?? 0) * 100)}
+            >
+              <div className="export-bar-head">
+                <strong>
+                  {exporting.phase === "decode"
+                    ? "制版 · 解码画面"
+                    : exporting.phase === "render"
+                      ? "印刷 · 字符帧"
+                      : "装订 · 编码成片"}
+                </strong>
+                <span>{Math.round((exporting.progress ?? 0) * 100)}%</span>
+              </div>
+              <span className="export-bar-track">
+                <span
+                  className="export-bar-fill"
+                  style={{ width: `${Math.round((exporting.progress ?? 0) * 100)}%` }}
+                />
+              </span>
+            </div>
+          )}
           <p className="output-note">
-            亮度类通道会为每个字符独立计算灰度（前景亮度 / 背景+前景双通道）；复制与 .txt 仍为密度版文本，.png 与视频导出按当前通道渲染。视频导出使用随程序内置的 FFmpeg：先在本地解码全部画面帧（「预渲染」），再按原帧率编码为 H.264 MP4（「编码中」，含原声，零丢帧），不依赖浏览器解码能力。
+            亮度类通道为每个字符独立计算灰度（前景亮度 / 背景+前景双通道）；复制与 TXT 为密度版文本，PNG 与 MP4 按当前通道渲染。导出由内置 FFmpeg 先本地解码全部画面帧（制版），再按原帧率编码为 H.264 MP4（成片，含原声，零丢帧）。
           </p>
         </div>
       </section>
 
       <footer className="studio-footer">
         <p>
-          字符工坊 GlyphWorks Windows 版是 KEENTROPY 的桌面演示：所有转换都在本机完成，不上传、不联网、不存储。
-          三种渲染通道：密度单通道保留原版；亮度前景只给字符上灰度；双通道同时计算背景与前景灰度（chafa 式）。
+          字符工坊 GlyphWorks 是 KEENTROPY 的桌面版画台：所有转换都在本机完成，不上传、不联网、不存储。
+          三种渲染通道——密度单通道保留原版；亮度前景只给字符上灰度；双通道同时计算背景与前景灰度（chafa 式）。
           浏览器无法解码的格式（MKV / MOV / AVI / WMV / HEVC / TIFF / HEIC）由内置 FFmpeg 处理。半块增强使用 Unicode 区块字符，请在等宽字体下查看。
+        </p>
+        <p className="shortcut-row">
+          快捷键：
+          <span className="kbd">Ctrl+O</span> 选稿 ·
+          <span className="kbd">Ctrl+Enter</span> 盖印打样 ·
+          <span className="kbd">Ctrl+C</span> 复制字符 ·
+          <span className="kbd">Ctrl+S</span> 存 TXT ·
+          <span className="kbd">Ctrl+Shift+S</span> 存 PNG
         </p>
       </footer>
     </>

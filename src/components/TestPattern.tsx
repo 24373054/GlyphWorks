@@ -64,10 +64,10 @@ export default function TestPattern({ className = "" }: { className?: string }) 
       }
       const text = encodeGrid(field, columns, rows, "classic" as RampId, "floyd" as DitherId, "dark" as OutputTheme);
       const fontSize = Math.max(6, Math.min((width / columns) * 2, (height / rows) * 1.3));
-      context.fillStyle = "#0b0e0a";
+      context.fillStyle = "#100d0a";
       context.fillRect(0, 0, width, height);
       context.font = `${fontSize.toFixed(1)}px ${FONT_STACK}`;
-      context.fillStyle = "rgba(198, 232, 138, .72)";
+      context.fillStyle = "rgba(180, 145, 79, .5)";
       context.textBaseline = "top";
       const lines = text.split("\n");
       const lineHeight = fontSize * 1.22;

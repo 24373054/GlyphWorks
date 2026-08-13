@@ -210,7 +210,7 @@ function createWindow(hidden: boolean): BrowserWindow {
     minWidth: 1060,
     minHeight: 720,
     show: false,
-    backgroundColor: "#0b0e0a",
+    backgroundColor: "#100d0a",
     autoHideMenuBar: true,
     title: "字符工坊 GlyphWorks",
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
@@ -724,6 +724,8 @@ if (!gotSingleInstanceLock) {
     }
 
     firstLaunchPath = findFileArg(process.argv);
+    const shotIndex = process.argv.indexOf("--shot");
+    const shotPath = shotIndex >= 0 ? path.resolve(process.argv[shotIndex + 1] ?? "shot.png") : null;
     const window = createWindow(false);
     window.webContents.on("did-finish-load", () => {
       if (firstLaunchPath) {
@@ -731,6 +733,70 @@ if (!gotSingleInstanceLock) {
         firstLaunchPath = null;
       }
     });
+    if (shotPath) {
+      // 开发辅助:截取 hero、空态工作室与示例态工作室三张界面图,供视觉审查(不进入发布流程)
+      window.webContents.once("did-finish-load", () => {
+        const base = shotPath.replace(/\.png$/i, "");
+        const capture = async (name: string) => {
+          const image = await window.webContents.capturePage();
+          await fsp.writeFile(`${base}-${name}.png`, image.toPNG());
+        };
+        setTimeout(async () => {
+          try {
+            await capture("hero-empty");
+            await window.webContents.executeJavaScript(
+              `window.scrollTo(0, (document.querySelector(".studio")?.offsetTop ?? 0) - 8)`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            await capture("studio-empty");
+            const clicked = await window.webContents.executeJavaScript(
+              `(() => { const button = [...document.querySelectorAll("button")].find((el) => el.textContent?.includes("试印示例")); if (button) { button.click(); return true; } return false; })()`,
+            );
+            if (clicked) {
+              await new Promise((resolve) => setTimeout(resolve, 2800));
+              const diag = await window.webContents.executeJavaScript(
+                `(() => {
+                  const sheet = document.querySelector(".proof-sheet");
+                  const mat = document.querySelector(".proof-mat");
+                  const canvas = document.querySelector(".bitmap-canvas");
+                  const stats = document.querySelector(".output-stats");
+                  const errorBar = document.querySelector(".error-bar");
+                  let canvasPixel = "no-canvas";
+                  if (canvas && canvas.width > 0) {
+                    try {
+                      const tmp = document.createElement("canvas");
+                      tmp.width = 1; tmp.height = 1;
+                      const tctx = tmp.getContext("2d");
+                      tctx.drawImage(canvas, Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1, 0, 0, 1, 1);
+                      const d = tctx.getImageData(0, 0, 1, 1).data;
+                      canvasPixel = [d[0], d[1], d[2]].join(",");
+                    } catch (e) { canvasPixel = "read-fail:" + String(e); }
+                  }
+                  return JSON.stringify({
+                    dpr: window.devicePixelRatio,
+                    scrollY: window.scrollY,
+                    stats: stats ? stats.textContent : null,
+                    error: errorBar ? errorBar.textContent : null,
+                    sheet: sheet ? sheet.getBoundingClientRect().toJSON() : null,
+                    mat: mat ? mat.getBoundingClientRect().toJSON() : null,
+                    canvas: canvas ? { w: canvas.width, h: canvas.height } : null,
+                    canvasPixel,
+                  });
+                })()`,
+              );
+              console.log(`SHOT DIAG ${diag}`);
+              await capture("studio-working");
+            }
+            console.log(`SHOT OK ${base}`);
+            app.exit(0);
+          } catch (error) {
+            console.error(`SHOT FAIL: ${String(error)}`);
+            app.exit(1);
+          }
+        }, 1500);
+      });
+      return;
+    }
   });
 
   app.on("window-all-closed", () => {

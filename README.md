@@ -13,6 +13,7 @@
 - 视频导出会把画面最长边限制在 1920 像素（高细腻度时字符等比缩小），避免内存紧张时编码失败。
 - 内置 FFmpeg 支持浏览器解不了的格式：MKV / MOV / AVI / WMV / HEVC 视频，TIFF / HEIC 图片。
 - Windows 集成：原生打开/另存为对话框、文件关联（右键“打开方式”）、拖文件到程序图标、单实例、无界面 CLI。
+- 1.1.0「版画工坊」界面：黑木工作台 + 纸样打样 + 朱砂印；六套策展预设、盖印揭示动画、样张角线与铭牌、首启示例、键盘快捷键、导出进度条。
 
 ## 运行与安装
 
@@ -23,7 +24,7 @@ npm install
 npm run dev
 ```
 
-构建与打包（产物为**单一安装包** `dist\GlyphWorks-1.0.0-Setup.exe`，内置 Electron 与 FFmpeg，用户无需另装任何东西）：
+构建与打包（产物为**单一安装包** `dist\GlyphWorks-1.1.0-Setup.exe`，内置 Electron 与 FFmpeg，用户无需另装任何东西）：
 
 ```powershell
 npm run dist
@@ -59,7 +60,14 @@ GlyphWorks.exe --cli --input in.tiff --output out.png --half-block
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-项目结构：`electron/`（主进程、preload 桥、FFmpeg 子进程封装）、`src/lib/ascii.ts`（07 原样复用的纯算法库）、`src/components/`（界面与导出管线）、`resources/ffmpeg/`（随包内置的 ffmpeg.exe / ffprobe.exe，未提交二进制，从本机 FFMPEG 目录复制）。
+界面视觉审查（输出空态与示例态两张截图，供设计迭代比对）：
+
+```powershell
+npm run build
+npx electron . --shot shot   # 生成 shot-empty.png 与 shot-working.png
+```
+
+项目结构：`electron/`（主进程、preload 桥、FFmpeg 子进程封装）、`src/lib/ascii.ts`（07 原样复用的纯算法库）、`src/lib/demo.ts`（首启示例的程序化木版画）、`src/components/`（界面与导出管线）、`resources/ffmpeg/`（随包内置的 ffmpeg.exe / ffprobe.exe，未提交二进制，从本机 FFMPEG 目录复制）。
 
 ## 许可与隐私
 
