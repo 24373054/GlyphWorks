@@ -86,6 +86,7 @@ interface ParsedArgs {
   options: CliTask["options"];
   signature: SignatureOptions;
   scale: number;
+  duotone: CliTask["duotone"];
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -141,7 +142,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     halfBlock: map.has("half-block"),
     dither: pick(map.get("dither"), ["none", "floyd", "bayer"] as const, "floyd"),
     theme: pick(map.get("theme"), ["dark", "light"] as const, "dark"),
-    channel: pick(map.get("channel"), ["density", "luminance", "dual"] as const, "density"),
+    channel: pick(map.get("channel"), ["density", "luminance", "dual", "duotone"] as const, "density"),
   };
   let cliError: string | null = null;
   if (cli && !input) cliError = "CLI 模式缺少 --input <文件>";
@@ -157,6 +158,19 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
   const rawScale = Number(map.get("scale") ?? "1");
   const scale = [1, 2, 4].includes(rawScale) ? rawScale : 1;
+  const hexColor = (value: string | null, fallback: string) =>
+    value && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+  const inkA = map.get("ink-a") ?? null;
+  const inkB = map.get("ink-b") ?? null;
+  const rawOffset = Number(map.get("offset") ?? "0");
+  const duotone: CliTask["duotone"] =
+    inkA || inkB
+      ? {
+          inkA: hexColor(inkA, "#c23f26"),
+          inkB: hexColor(inkB, "#3a3229"),
+          offset: Number.isFinite(rawOffset) ? clamp(Math.round(rawOffset), 0, 6) : 0,
+        }
+      : undefined;
   return {
     smoke,
     cli,
@@ -167,6 +181,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     options,
     signature,
     scale,
+    duotone,
   };
 }
 
@@ -266,13 +281,14 @@ function sendProgress(session: ExportSession, phase: "decode" | "render" | "enco
   });
 }
 
-function spawnDecode(session: ExportSession, columns: number, sampleRows: number): ChildProcess {
+function spawnDecode(session: ExportSession, columns: number, sampleRows: number, fps: number): ChildProcess {
   const args = [
     "-hide_banner",
     "-loglevel", "error",
     "-i", session.sourcePath,
     "-map", "0:v:0",
-    "-vf", `scale=${columns}:${sampleRows}:flags=lanczos,format=rgb24`,
+    // fps 滤镜让解码帧率与导出帧率一致:GIF 按 15fps 抽帧,MP4 顺带把 VFR 源规范成 CFR
+    "-vf", `scale=${columns}:${sampleRows}:flags=lanczos,format=rgb24,fps=${fps}`,
     "-c:v", "rawvideo",
     "-f", "image2",
     "-start_number", "0",
@@ -293,44 +309,8 @@ async function removeOutput(session: ExportSession): Promise<void> {
   await fsp.rm(session.outputPath, { force: true }).catch(() => undefined);
 }
 
-function runEncode(session: ExportSession, withAudio: boolean): Promise<number | null> {
+function spawnEncoder(session: ExportSession, args: string[]): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    const base = [
-      "-hide_banner",
-      "-y",
-      "-stats_period", "0.5",
-      "-framerate", String(session.fps),
-      "-start_number", "0",
-      "-i", "frame_%04d.jpg",
-    ];
-    const args = withAudio
-      ? [
-          ...base,
-          "-i", session.sourcePath,
-          "-map", "0:v:0",
-          "-map", "1:a?",
-          "-c:v", "libx264",
-          "-preset", "medium",
-          "-crf", "16",
-          "-pix_fmt", "yuv420p",
-          "-r", String(session.fps),
-          "-c:a", "aac",
-          "-b:a", "192k",
-          "-movflags", "+faststart",
-          "-shortest",
-          session.outputPath,
-        ]
-      : [
-          ...base,
-          "-map", "0:v:0",
-          "-c:v", "libx264",
-          "-preset", "medium",
-          "-crf", "16",
-          "-pix_fmt", "yuv420p",
-          "-r", String(session.fps),
-          "-movflags", "+faststart",
-          session.outputPath,
-        ];
     const child = spawn(ffmpegExe(), args, {
       cwd: session.tempDir,
       windowsHide: true,
@@ -359,6 +339,63 @@ function runEncode(session: ExportSession, withAudio: boolean): Promise<number |
       resolve(code);
     });
   });
+}
+
+function runEncode(session: ExportSession, withAudio: boolean): Promise<number | null> {
+  const base = [
+    "-hide_banner",
+    "-y",
+    "-stats_period", "0.5",
+    "-framerate", String(session.fps),
+    "-start_number", "0",
+    "-i", "frame_%04d.jpg",
+  ];
+  const args = withAudio
+    ? [
+        ...base,
+        "-i", session.sourcePath,
+        "-map", "0:v:0",
+        "-map", "1:a?",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "16",
+        "-pix_fmt", "yuv420p",
+        "-r", String(session.fps),
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        "-shortest",
+        session.outputPath,
+      ]
+    : [
+        ...base,
+        "-map", "0:v:0",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "16",
+        "-pix_fmt", "yuv420p",
+        "-r", String(session.fps),
+        "-movflags", "+faststart",
+        session.outputPath,
+      ];
+  return spawnEncoder(session, args);
+}
+
+/** GIF 编码:单次 palettegen/paletteuse 生成 256 色调色板,无限循环。 */
+function runGifEncode(session: ExportSession): Promise<number | null> {
+  const args = [
+    "-hide_banner",
+    "-y",
+    "-stats_period", "0.5",
+    "-framerate", String(session.fps),
+    "-start_number", "0",
+    "-i", "frame_%04d.jpg",
+    "-vf",
+    "split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=floyd_steinberg",
+    "-loop", "0",
+    session.outputPath,
+  ];
+  return spawnEncoder(session, args);
 }
 
 function registerIpc(): void {
@@ -439,11 +476,14 @@ function registerIpc(): void {
     }
   });
 
-  ipcMain.handle("app:choose-save-path", async (_event, defaultName: string) => {
+  ipcMain.handle("app:choose-save-path", async (_event, defaultName: string, ext?: string) => {
+    const isGif = ext === "gif";
     const result = await showSaveDialog({
-      title: "保存字符视频",
+      title: isGif ? "保存字符动图" : "保存字符视频",
       defaultPath: path.join(lastSaveDir ?? "", defaultName),
-      filters: [{ name: "MP4 视频", extensions: ["mp4"] }],
+      filters: isGif
+        ? [{ name: "GIF 动图", extensions: ["gif"] }]
+        : [{ name: "MP4 视频", extensions: ["mp4"] }],
     });
     if (result.canceled || !result.filePath) return null;
     lastSaveDir = path.dirname(result.filePath);
@@ -470,7 +510,7 @@ function registerIpc(): void {
       canceled: false,
       decodeDone: Promise.resolve(),
     };
-    session.decodeProc = spawnDecode(session, request.columns, request.sampleRows);
+    session.decodeProc = spawnDecode(session, request.columns, request.sampleRows, request.fps);
     session.decodeDone = new Promise<void>((resolve) => {
       session.decodeProc?.once("close", (code) => {
         session.decodeExitCode = code;
@@ -527,13 +567,14 @@ function registerIpc(): void {
       sessions.delete(sessionId);
       return { ok: false, error: "cancelled" };
     }
-    let code = await runEncode(session, session.hasAudio);
+    const isGif = session.outputPath.toLowerCase().endsWith(".gif");
+    let code = isGif ? await runGifEncode(session) : await runEncode(session, session.hasAudio);
     if (session.canceled) {
       await Promise.all([cleanupTemp(session), removeOutput(session)]);
       sessions.delete(sessionId);
       return { ok: false, error: "cancelled" };
     }
-    if (code !== 0 && session.hasAudio) {
+    if (!isGif && code !== 0 && session.hasAudio) {
       code = await runEncode(session, false);
       if (session.canceled) {
         await Promise.all([cleanupTemp(session), removeOutput(session)]);
@@ -691,6 +732,7 @@ if (!gotSingleInstanceLock) {
         options: parsed.options,
         signature: parsed.signature,
         scale: parsed.scale,
+        duotone: parsed.duotone,
       };
     }
 
@@ -851,6 +893,33 @@ if (!gotSingleInstanceLock) {
                 );
                 console.log(`SHOT DIAG3 ${diag3}`);
                 await capture("studio-compare");
+                await window.webContents.executeJavaScript(
+                  `(() => { const ov = document.querySelector(".compare-overlay"); if (ov) ov.click(); return true; })()`,
+                );
+              }
+              const duotoneSwitched = await window.webContents.executeJavaScript(
+                `(() => { const sel = [...document.querySelectorAll("select")].find((s) => [...s.options].some((o) => o.value === "duotone")); if (sel) { sel.value = "duotone"; sel.dispatchEvent(new Event("change", { bubbles: true })); return true; } return false; })()`,
+              );
+              if (duotoneSwitched) {
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                const seal = await window.webContents.executeJavaScript(
+                  `(() => { const b = document.querySelector(".seal-button"); if (b && !b.disabled) { b.click(); return true; } return false; })()`,
+                );
+                if (seal) await new Promise((resolve) => setTimeout(resolve, 1200));
+                const diag4 = await window.webContents.executeJavaScript(
+                  `(() => {
+                    const colorA = document.querySelector('input[aria-label="前景墨颜色"]');
+                    const sel = [...document.querySelectorAll("select")].find((s) => [...s.options].some((o) => o.value === "duotone"));
+                    return JSON.stringify({
+                      selectValue: sel ? sel.value : null,
+                      inkA: colorA ? colorA.value : null,
+                      block: Boolean(document.querySelector(".duotone-block")),
+                      archiveLen: JSON.parse(localStorage.getItem("glyphworks.archive.v1") ?? "[]").length,
+                    });
+                  })()`,
+                );
+                console.log(`SHOT DIAG4 ${diag4}`);
+                await capture("studio-duotone");
               }
             }
             console.log(`SHOT OK ${base}`);

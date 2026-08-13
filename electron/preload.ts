@@ -24,8 +24,8 @@ const api: AppApi = {
     ipcRenderer.invoke("app:save-buffer", defaultName, data, mime) as Promise<string | null>,
   saveDirect: (filePath, data) =>
     ipcRenderer.invoke("app:save-direct", filePath, data) as Promise<void>,
-  chooseSavePath: (defaultName) =>
-    ipcRenderer.invoke("app:choose-save-path", defaultName) as Promise<string | null>,
+  chooseSavePath: (defaultName, ext) =>
+    ipcRenderer.invoke("app:choose-save-path", defaultName, ext) as Promise<string | null>,
   startExport: (request) =>
     ipcRenderer.invoke("app:start-export", request) as Promise<string>,
   readDecodedFrame: (sessionId, index) =>

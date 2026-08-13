@@ -23,10 +23,10 @@ import {
 import TestPattern from "./TestPattern";
 import { demoWoodcut } from "@/lib/demo";
 import { DEFAULT_SIGNATURE, drawSignature } from "@/lib/signature";
-import type { CliTask, ProbeResult, SignatureOptions } from "@/shared/ipc";
+import type { CliTask, DuotoneOptions, ProbeResult, SignatureOptions } from "@/shared/ipc";
 
 type MediaKind = "image" | "video";
-type ChannelMode = "density" | "luminance" | "dual";
+type ChannelMode = "density" | "luminance" | "dual" | "duotone";
 
 type MediaState = {
   kind: MediaKind;
@@ -93,6 +93,21 @@ const PRESETS: Preset[] = [
   },
 ];
 
+const DEFAULT_DUOTONE: DuotoneOptions = { inkA: "#c23f26", inkB: "#3a3229", offset: 0 };
+
+/** 套色策展:前景墨(字)+ 背景墨(底)+ 纸基。 */
+const DUOTONE_PRESETS: Array<{
+  name: string;
+  base: OutputTheme;
+  inkA: string;
+  inkB: string;
+}> = [
+  { name: "朱砂拓墨", base: "dark", inkA: "#c23f26", inkB: "#3a3229" },
+  { name: "磷光墨青", base: "dark", inkA: "#c6e88a", inkB: "#27424a" },
+  { name: "靛蓝纸白", base: "light", inkA: "#2f4a5f", inkB: "#c9b98f" },
+  { name: "朱印墨字", base: "light", inkA: "#241f18", inkB: "#c23f26" },
+];
+
 /** 样张档案:每次「盖印打样」留下一张版次卡。 */
 interface ArchiveEntry {
   id: string;
@@ -102,6 +117,7 @@ interface ArchiveEntry {
   options: AsciiOptions;
   channel: ChannelMode;
   signature: SignatureOptions;
+  duotone: DuotoneOptions | null;
   createdAt: number;
 }
 
@@ -175,6 +191,35 @@ function mixRgb(
 ): string {
   const clamp = (v: number) => Math.round(Math.min(255, Math.max(0, v)));
   return `rgb(${clamp(a[0] + (b[0] - a[0]) * t)},${clamp(a[1] + (b[1] - a[1]) * t)},${clamp(a[2] + (b[2] - a[2]) * t)})`;
+}
+
+/**
+ * 双色套印调色板:把双通道规划的 bg/fg 灰度级分别重映射为
+ * 「纸基 → 背景墨」与「纸基 → 前景墨」两条色阶。灰度级方向随纸基反转:
+ * 暗底 = 越亮越有墨,纸底 = 越暗越有墨。
+ */
+function duotonePalettes(
+  base: OutputTheme,
+  inkA: string,
+  inkB: string,
+): { bgColors: string[]; fgColors: string[] } {
+  const levels = DUAL_LEVELS[base];
+  const toInk = (values: number[], ink: string): string[] => {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    const direction = base === "dark" ? 1 : -1;
+    const baseHex = hexToRgb(themeColors(base).bg);
+    const inkRgb = hexToRgb(ink);
+    return values.map((v) => {
+      const t = direction === 1 ? (v - min) / span : (max - v) / span;
+      return mixRgb(baseHex, inkRgb, 0.1 + t * 0.9);
+    });
+  };
+  return {
+    bgColors: toInk(levels.bg, inkB),
+    fgColors: toInk(levels.fg, inkA),
+  };
 }
 
 /** Measure the actual ink coverage of each ramp glyph in the output font. */
@@ -262,6 +307,7 @@ function renderPlanToCanvas(
   mode: ChannelMode,
   size?: { width: number; height: number },
   fixedSize = false,
+  duotone?: { bgColors: string[]; fgColors: string[]; offsetX: number; offsetY: number } | null,
 ) {
   const context = canvas.getContext("2d");
   if (!context) return;
@@ -287,14 +333,18 @@ function renderPlanToCanvas(
   const darkest = hexToRgb(anchors.darkest);
   const brightest = hexToRgb(anchors.brightest);
   const baseBg = themeColors(theme).bg;
-  const bgColors =
-    mode === "dual"
+  const bgColors = duotone
+    ? duotone.bgColors
+    : mode === "dual"
       ? DUAL_LEVELS[theme].bg.map((level) => mixRgb(darkest, brightest, level))
       : null;
-  const fgColors =
-    mode === "dual"
+  const fgColors = duotone
+    ? duotone.fgColors
+    : mode === "dual"
       ? DUAL_LEVELS[theme].fg.map((level) => mixRgb(darkest, brightest, level))
       : LUM_LEVELS.map((level) => mixRgb(darkest, brightest, level));
+  const offsetX = duotone?.offsetX ?? 0;
+  const offsetY = duotone?.offsetY ?? 0;
   const cellWidth = cssWidth / columns;
   const cellHeight = cssHeight / rows;
   context.fillStyle = baseBg;
@@ -325,8 +375,8 @@ function renderPlanToCanvas(
         context.font = font;
         context.fillText(
           glyph,
-          x + (cellWidth - charWidth) / 2,
-          y + cellHeight / 2,
+          x + offsetX + (cellWidth - charWidth) / 2,
+          y + offsetY + cellHeight / 2,
         );
       }
     }
@@ -351,7 +401,7 @@ function drawAsciiToCanvas(
   chan: ChannelMode,
   theme: OutputTheme,
   ramp: RampId,
-  opts: { scale?: number; signature?: SignatureOptions } = {},
+  opts: { scale?: number; signature?: SignatureOptions; duotone?: DuotoneOptions | null } = {},
 ) {
   const fontSize = 12 * (opts.scale ?? 1);
   const context = canvas.getContext("2d");
@@ -364,6 +414,14 @@ function drawAsciiToCanvas(
   canvas.width = width;
   canvas.height = height;
   if (chan !== "density" && plan) {
+    const palette =
+      chan === "duotone" && opts.duotone
+        ? {
+            ...duotonePalettes(theme, opts.duotone.inkA, opts.duotone.inkB),
+            offsetX: opts.duotone.offset * (opts.scale ?? 1),
+            offsetY: Math.round(opts.duotone.offset * 0.6 * (opts.scale ?? 1)),
+          }
+        : null;
     renderPlanToCanvas(
       canvas,
       plan,
@@ -374,6 +432,7 @@ function drawAsciiToCanvas(
       chan,
       { width, height },
       true,
+      palette,
     );
     if (opts.signature) drawSignature(context, width, height, opts.signature, theme);
     return;
@@ -401,6 +460,7 @@ function renderGridFrame(
   dualLUT: Uint8Array,
   size: { width: number; height: number },
   signature?: SignatureOptions,
+  duotone?: DuotoneOptions | null,
 ) {
   const grid = new Float32Array(columns * sampleRows);
   for (let i = 0; i < grid.length; i += 1) {
@@ -414,7 +474,7 @@ function renderGridFrame(
   if (!context) return;
   if (channel !== "density") {
     const plan =
-      channel === "dual"
+      channel === "dual" || channel === "duotone"
         ? planDualLUT(toned, columns, sampleRows, dualLUT, options.dither)
         : planLuminanceChannel(
             toned,
@@ -425,6 +485,14 @@ function renderGridFrame(
             options.theme,
             LUM_LUT,
           );
+    const palette =
+      channel === "duotone" && duotone
+        ? {
+            ...duotonePalettes(options.theme, duotone.inkA, duotone.inkB),
+            offsetX: duotone.offset,
+            offsetY: Math.round(duotone.offset * 0.6),
+          }
+        : null;
     renderPlanToCanvas(
       canvas,
       plan,
@@ -435,6 +503,7 @@ function renderGridFrame(
       channel,
       size,
       true,
+      palette,
     );
     if (signature) drawSignature(context, canvas.width, canvas.height, signature, options.theme);
     return;
@@ -450,6 +519,7 @@ function makeExportCanvas(
   columns: number,
   textRows: number,
   theme: OutputTheme,
+  maxDimension = 1920,
 ): HTMLCanvasElement {
   const probe = document.createElement("canvas").getContext("2d");
   if (!probe) throw new Error("无法创建绘图上下文");
@@ -459,10 +529,9 @@ function makeExportCanvas(
   const toEven = (value: number) => (value % 2 === 0 ? value : value + 1);
   let width = toEven(Math.ceil(charWidth * columns) + 8);
   let height = toEven(Math.ceil(lineHeight * textRows) + 8);
-  // 大画布会让 x264 在内存紧张的机器上分配失败：把最长边限制到 1920，
-  // 字符按目标画布等比缩小，输出不受影响。
-  const MAX_DIMENSION = 1920;
-  const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
+  // 大画布会让 x264 / GIF 在内存紧张的机器上分配失败:把最长边限制到
+  // maxDimension(MP4 1920,GIF 960),字符按目标画布等比缩小,输出不受影响。
+  const scale = Math.min(1, maxDimension / Math.max(width, height));
   if (scale < 1) {
     width = toEven(Math.max(2, Math.round(width * scale)));
     height = toEven(Math.max(2, Math.round(height * scale)));
@@ -567,6 +636,7 @@ export default function AsciiStudio() {
   const [proofNumber, setProofNumber] = useState(0);
   const [appliedTheme, setAppliedTheme] = useState<OutputTheme>("dark");
   const [signature, setSignature] = useState<SignatureOptions>(DEFAULT_SIGNATURE);
+  const [duotone, setDuotone] = useState<DuotoneOptions>(DEFAULT_DUOTONE);
   const [exportScale, setExportScale] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -601,7 +671,11 @@ export default function AsciiStudio() {
   const proofPrintRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef(false);
   const proofNumberRef = useRef(0);
-  const stampRef = useRef<{ edition: number; signature: SignatureOptions } | null>(null);
+  const stampRef = useRef<{
+    edition: number;
+    signature: SignatureOptions;
+    duotone: DuotoneOptions;
+  } | null>(null);
   const mediaNameRef = useRef("");
   const dragPathRef = useRef<string | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
@@ -972,7 +1046,7 @@ export default function AsciiStudio() {
         const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
         const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
         plan =
-          appliedChannel === "dual"
+          appliedChannel === "dual" || appliedChannel === "duotone"
             ? planDualLUT(
                 converted.toned,
                 converted.columns,
@@ -999,7 +1073,7 @@ export default function AsciiStudio() {
           appliedChannel,
           appliedOptions.theme,
           appliedOptions.ramp,
-          { signature },
+          { signature, duotone: appliedChannel === "duotone" ? duotone : null },
         );
       }
       setOutput(converted);
@@ -1035,6 +1109,7 @@ export default function AsciiStudio() {
             options: { ...appliedOptions },
             channel: appliedChannel,
             signature: stamp.signature,
+            duotone: appliedChannel === "duotone" ? { ...stamp.duotone } : null,
             createdAt: Date.now(),
           };
           setArchive((previous) => {
@@ -1047,7 +1122,7 @@ export default function AsciiStudio() {
     } catch (renderError) {
       setError(`渲染失败：${String(renderError).slice(0, 400)}`);
     }
-  }, [captureBitmap, signature]);
+  }, [captureBitmap, signature, duotone]);
 
   useEffect(() => {
     if (!media) return;
@@ -1074,7 +1149,7 @@ export default function AsciiStudio() {
       const inks = measureRampInk(RAMPS[options.ramp]);
       const dualLUT = buildDualLUT(RAMPS[options.ramp], inks, options.theme);
       plan =
-        channel === "dual"
+        channel === "dual" || channel === "duotone"
           ? planDualLUT(
               converted.toned,
               converted.columns,
@@ -1094,8 +1169,9 @@ export default function AsciiStudio() {
     }
     drawAsciiToCanvas(canvas, converted, plan, channel, options.theme, options.ramp, {
       signature,
+      duotone: channel === "duotone" ? duotone : null,
     });
-  }, [captureBitmap, channel, options, signature]);
+  }, [captureBitmap, channel, options, signature, duotone]);
 
   useEffect(() => {
     if (!(media?.kind === "video" && !media.native && live)) return;
@@ -1133,9 +1209,9 @@ export default function AsciiStudio() {
     revealRef.current = true;
     proofNumberRef.current += 1;
     setProofNumber(proofNumberRef.current);
-    stampRef.current = { edition: proofNumberRef.current, signature };
+    stampRef.current = { edition: proofNumberRef.current, signature, duotone };
     setRenderVersion((value) => value + 1);
-  }, [options, channel, signature]);
+  }, [options, channel, signature, duotone]);
 
   const changeChannel = useCallback(
     (next: ChannelMode) => {
@@ -1181,6 +1257,24 @@ export default function AsciiStudio() {
     setRenderVersion((value) => value + 1);
   }, []);
 
+  /** 套色只改呈现(配色/错位),不重算规划:即时生效,无需盖印。 */
+  const changeDuotone = useCallback((key: keyof DuotoneOptions, value: string | number) => {
+    setDuotone((previous) => ({ ...previous, [key]: value }));
+    setRenderVersion((value) => value + 1);
+  }, []);
+
+  const applyDuotonePreset = useCallback(
+    (preset: { name: string; base: OutputTheme; inkA: string; inkB: string }) => {
+      setDuotone((previous) => ({ ...previous, inkA: preset.inkA, inkB: preset.inkB }));
+      if (options.theme !== preset.base) {
+        setOptions((previous) => ({ ...previous, theme: preset.base }));
+        setDirty(true);
+      }
+      setRenderVersion((value) => value + 1);
+    },
+    [options.theme],
+  );
+
   /** 按当前已应用参数重绘一版成作(供 PNG 保存与拖出),精度按像素上限收敛。 */
   const renderProofCanvas = useCallback(
     async (scale: number): Promise<HTMLCanvasElement | null> => {
@@ -1200,7 +1294,7 @@ export default function AsciiStudio() {
         const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
         const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
         plan =
-          appliedChannel === "dual"
+          appliedChannel === "dual" || appliedChannel === "duotone"
             ? planDualLUT(
                 converted.toned,
                 converted.columns,
@@ -1226,11 +1320,15 @@ export default function AsciiStudio() {
         appliedChannel,
         appliedOptions.theme,
         appliedOptions.ramp,
-        { scale: effectiveScale, signature },
+        {
+          scale: effectiveScale,
+          signature,
+          duotone: appliedChannel === "duotone" ? duotone : null,
+        },
       );
       return canvas;
     },
-    [captureBitmap, signature],
+    [captureBitmap, signature, duotone],
   );
 
   const downloadPng = useCallback(async () => {
@@ -1286,6 +1384,7 @@ export default function AsciiStudio() {
     setOptions(entry.options);
     setChannel(entry.channel);
     setSignature(entry.signature);
+    setDuotone(entry.duotone ?? DEFAULT_DUOTONE);
     setActivePreset(null);
     appliedRef.current = { options: entry.options, channel: entry.channel };
     setDirty(false);
@@ -1301,6 +1400,7 @@ export default function AsciiStudio() {
       channel: ChannelMode;
       probe: ProbeResult | null;
       signature: SignatureOptions;
+      duotone: DuotoneOptions | null;
     }): Promise<{ ok: boolean; error?: string }> => {
       const {
         outputPath,
@@ -1309,12 +1409,14 @@ export default function AsciiStudio() {
         channel: exportChannel,
         probe: exportProbe,
         signature: exportSignature,
+        duotone: exportDuotone,
       } = input;
+      const isGif = outputPath.toLowerCase().endsWith(".gif");
       const duration = exportProbe?.duration ?? null;
       if (!duration || duration <= 0) {
         return { ok: false, error: "无法读取视频时长，请重新选择文件。" };
       }
-      const fps = Math.min(240, Math.max(1, exportProbe?.fps ?? 30));
+      const fps = Math.min(isGif ? 15 : 240, Math.max(1, exportProbe?.fps ?? 30));
       const width = exportProbe?.width ?? 0;
       const height = exportProbe?.height ?? 0;
       if (width <= 0 || height <= 0) {
@@ -1328,10 +1430,16 @@ export default function AsciiStudio() {
         ? estimateRows(columns, width, height, true, aspectFactor) * 2
         : estimateRows(columns, width, height, false, aspectFactor);
       const textRows = halfBlock ? sampleRows / 2 : sampleRows;
-      const canvas = makeExportCanvas(columns, textRows, exportOptions.theme);
+      const canvas = makeExportCanvas(columns, textRows, exportOptions.theme, isGif ? 960 : 1920);
       const inks = measureRampInk(RAMPS[exportOptions.ramp]);
       const dualLUT = buildDualLUT(RAMPS[exportOptions.ramp], inks, exportOptions.theme);
       const totalFrames = Math.max(1, Math.round(duration * fps));
+      if (isGif && totalFrames > 600) {
+        return {
+          ok: false,
+          error: `GIF 动图上限 600 帧（当前约 ${totalFrames} 帧），请截短视频或改用 MP4 导出。`,
+        };
+      }
 
       exportCancelRef.current = false;
       setExporting({ active: true, progress: 0, phase: "decode" });
@@ -1364,6 +1472,7 @@ export default function AsciiStudio() {
             dualLUT,
             { width: canvas.width, height: canvas.height },
             exportSignature,
+            exportChannel === "duotone" ? exportDuotone : null,
           );
           const jpeg = canvasToJpegBytes(canvas, 0.95);
           if (jpeg) await window.app.writeFrame(sessionId, index, jpeg.buffer);
@@ -1403,29 +1512,33 @@ export default function AsciiStudio() {
     [],
   );
 
-  const exportVideo = useCallback(async () => {
-    if (!media || media.kind !== "video" || !media.path) {
-      setError("当前文件没有可用的本地路径，无法导出视频。请重新通过对话框打开文件。");
-      return;
-    }
-    const stem = media.name.replace(/\.[^.]+$/, "");
-    const outputPath = await window.app.chooseSavePath(`${stem}-ascii.mp4`);
-    if (!outputPath) return;
-    appliedRef.current = { options, channel };
-    setDirty(false);
-    setLive(false);
-    const result = await runVideoExport({
-      outputPath,
-      sourcePath: media.path,
-      options,
-      channel,
-      probe,
-      signature,
-    });
-    if (!result.ok && result.error !== "cancelled") {
-      setError(`导出失败：${result.error}`);
-    }
-  }, [media, options, channel, probe, signature, runVideoExport]);
+  const exportVideo = useCallback(
+    async (format: "mp4" | "gif") => {
+      if (!media || media.kind !== "video" || !media.path) {
+        setError("当前文件没有可用的本地路径，无法导出。请重新通过对话框打开文件。");
+        return;
+      }
+      const stem = media.name.replace(/\.[^.]+$/, "");
+      const outputPath = await window.app.chooseSavePath(`${stem}-ascii.${format}`, format);
+      if (!outputPath) return;
+      appliedRef.current = { options, channel };
+      setDirty(false);
+      setLive(false);
+      const result = await runVideoExport({
+        outputPath,
+        sourcePath: media.path,
+        options,
+        channel,
+        probe,
+        signature,
+        duotone: channel === "duotone" ? duotone : null,
+      });
+      if (!result.ok && result.error !== "cancelled") {
+        setError(`导出失败：${result.error}`);
+      }
+    },
+    [media, options, channel, probe, signature, duotone, runVideoExport],
+  );
 
   const runCli = useCallback(
     async (task: CliTask) => {
@@ -1462,7 +1575,7 @@ export default function AsciiStudio() {
             let plan: DualPlan | null = null;
             if (task.options.channel !== "density") {
               plan =
-                task.options.channel === "dual"
+                task.options.channel === "dual" || task.options.channel === "duotone"
                   ? planDualLUT(
                       converted.toned,
                       converted.columns,
@@ -1489,7 +1602,11 @@ export default function AsciiStudio() {
               task.options.channel,
               task.options.theme,
               task.options.ramp,
-              { scale: clampProofScale(converted.columns, converted.rows, task.scale ?? 1), signature: taskSignature },
+              {
+                scale: clampProofScale(converted.columns, converted.rows, task.scale ?? 1),
+                signature: taskSignature,
+                duotone: task.options.channel === "duotone" ? (task.duotone ?? DEFAULT_DUOTONE) : null,
+              },
             );
             const buffer = await canvasToBuffer(outputCanvas, "image/png");
             if (!buffer) throw new Error("PNG 渲染失败");
@@ -1507,6 +1624,7 @@ export default function AsciiStudio() {
           channel: task.options.channel,
           probe: inputProbe,
           signature: task.signature ?? DEFAULT_SIGNATURE,
+          duotone: task.options.channel === "duotone" ? (task.duotone ?? DEFAULT_DUOTONE) : null,
         });
         if (result.ok) {
           window.app.cliDone(0, task.output);
@@ -1900,6 +2018,7 @@ export default function AsciiStudio() {
                 <option value="density">密度单通道（原版）</option>
                 <option value="luminance">亮度前景 · 字符灰度（背景不变）</option>
                 <option value="dual">双通道 · 背景+前景灰度（chafa 式）</option>
+                <option value="duotone">双色套印 · 前景墨+背景墨</option>
               </select>
             </label>
             <label className="field">
@@ -1945,6 +2064,60 @@ export default function AsciiStudio() {
                 <option value="light">浅色墨纸 · 纸样打样</option>
               </select>
             </label>
+            {channel === "duotone" && (
+              <div className="duotone-block">
+                <p className="presets-note">套色 · 双墨版（纸基由上方「输出风格」决定）</p>
+                <div className="duotone-presets">
+                  {DUOTONE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      className={`preset-chip ${
+                        duotone.inkA === preset.inkA && duotone.inkB === preset.inkB ? "is-active" : ""
+                      }`}
+                      onClick={() => applyDuotonePreset(preset)}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+                <label className="field">
+                  <span>前景墨（字）</span>
+                  <span className="color-field">
+                    <input
+                      type="color"
+                      value={duotone.inkA}
+                      onChange={(event) => changeDuotone("inkA", event.target.value)}
+                      aria-label="前景墨颜色"
+                    />
+                    <code>{duotone.inkA}</code>
+                  </span>
+                </label>
+                <label className="field">
+                  <span>背景墨（底）</span>
+                  <span className="color-field">
+                    <input
+                      type="color"
+                      value={duotone.inkB}
+                      onChange={(event) => changeDuotone("inkB", event.target.value)}
+                      aria-label="背景墨颜色"
+                    />
+                    <code>{duotone.inkB}</code>
+                  </span>
+                </label>
+                <label className="field">
+                  <span>套印错位 <em>{duotone.offset} px</em></span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={6}
+                    step={1}
+                    value={duotone.offset}
+                    onChange={(event) => changeDuotone("offset", Number(event.target.value))}
+                  />
+                </label>
+              </div>
+            )}
             <div className="field-row">
               <label className="check">
                 <input
@@ -2183,9 +2356,20 @@ export default function AsciiStudio() {
                 type="button"
                 className="action-button"
                 disabled={(!output && !live) || Boolean(exporting?.active)}
-                onClick={() => void exportVideo()}
+                onClick={() => void exportVideo("mp4")}
               >
                 {exporting?.active ? "正在导出…" : "导出 MP4（原帧率）"}
+              </button>
+            )}
+            {isVideo && (
+              <button
+                type="button"
+                className="action-button"
+                disabled={(!output && !live) || Boolean(exporting?.active)}
+                title="上限 960px / 15fps / 600 帧"
+                onClick={() => void exportVideo("gif")}
+              >
+                导出 GIF 动图
               </button>
             )}
             {exporting?.active && (
@@ -2229,9 +2413,9 @@ export default function AsciiStudio() {
             </div>
           )}
           <p className="output-note">
-            亮度类通道为每个字符独立计算灰度（前景亮度 / 背景+前景双通道）；复制与 TXT 为密度版文本，PNG 与 MP4 按当前通道渲染并盖上落款。
+            亮度类通道为每个字符独立计算灰度；双色套印把背景与前景分别映射到两种墨色（可选错位偏移）。复制与 TXT 为密度版文本，PNG 与 MP4 按当前通道渲染并盖上落款。
             样张上滚轮可放大检视、按住拖动平移、双击复位。存 PNG 可拖到桌面直接保存，精度由「成作精度」决定。
-            导出由内置 FFmpeg 先本地解码全部画面帧（制版），再按原帧率编码为 H.264 MP4（成片，含原声，零丢帧）。
+            导出由内置 FFmpeg 先本地解码全部画面帧（制版），再按原帧率编码为 H.264 MP4（成片，含原声，零丢帧）；GIF 动图上限 960px / 15fps / 600 帧。
           </p>
         </div>
 
@@ -2267,7 +2451,7 @@ export default function AsciiStudio() {
                 >
                   <img src={entry.thumb} alt={`第 ${entry.edition} 版`} />
                   <span className="archive-meta">
-                    第 {entry.edition} 版 · {entry.options.columns} 列 · {entry.channel === "density" ? "密度" : entry.channel === "dual" ? "双通道" : "亮度"}
+                    第 {entry.edition} 版 · {entry.options.columns} 列 · {entry.channel === "density" ? "密度" : entry.channel === "dual" ? "双通道" : entry.channel === "duotone" ? "套色" : "亮度"}
                   </span>
                   <button
                     type="button"
@@ -2290,7 +2474,7 @@ export default function AsciiStudio() {
       <footer className="studio-footer">
         <p>
           字符工坊 GlyphWorks 是 KEENTROPY 的桌面版画台：所有转换都在本机完成，不上传、不联网、不存储。
-          三种渲染通道——密度单通道保留原版；亮度前景只给字符上灰度；双通道同时计算背景与前景灰度（chafa 式）。
+          四种渲染通道——密度单通道保留原版；亮度前景只给字符上灰度；双通道同时计算背景与前景灰度（chafa 式）；双色套印把背景与前景分别映射到两种墨色（可加错位）。
           浏览器无法解码的格式（MKV / MOV / AVI / WMV / HEVC / TIFF / HEIC）由内置 FFmpeg 处理。半块增强使用 Unicode 区块字符，请在等宽字体下查看。
         </p>
         <p className="shortcut-row">

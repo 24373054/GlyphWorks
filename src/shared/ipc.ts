@@ -49,7 +49,7 @@ export interface CliOptions {
   halfBlock: boolean;
   dither: "none" | "floyd" | "bayer";
   theme: "dark" | "light";
-  channel: "density" | "luminance" | "dual";
+  channel: "density" | "luminance" | "dual" | "duotone";
 }
 
 /** 落款与钤印:盖在样张、PNG 与 MP4 每一帧上。 */
@@ -61,6 +61,13 @@ export interface SignatureOptions {
   colophon: string;
 }
 
+/** 双色套印:前景墨(字)、背景墨(底)与套印错位(px)。 */
+export interface DuotoneOptions {
+  inkA: string;
+  inkB: string;
+  offset: number;
+}
+
 export interface CliTask {
   input: string;
   output: string;
@@ -68,6 +75,7 @@ export interface CliTask {
   signature?: SignatureOptions;
   /** PNG 成作精度:1 / 2 / 4。 */
   scale?: number;
+  duotone?: DuotoneOptions;
 }
 
 export interface AppApi {
@@ -81,7 +89,7 @@ export interface AppApi {
   saveText(defaultName: string, text: string): Promise<string | null>;
   saveBuffer(defaultName: string, data: ArrayBuffer, mime: string): Promise<string | null>;
   saveDirect(path: string, data: ArrayBuffer | string): Promise<void>;
-  chooseSavePath(defaultName: string): Promise<string | null>;
+  chooseSavePath(defaultName: string, ext?: string): Promise<string | null>;
   startExport(request: ExportStartRequest): Promise<string>;
   readDecodedFrame(sessionId: string, index: number): Promise<Uint8Array | null>;
   writeFrame(sessionId: string, index: number, jpeg: ArrayBuffer): Promise<void>;
