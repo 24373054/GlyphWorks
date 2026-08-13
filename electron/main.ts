@@ -23,7 +23,13 @@ import type { CliTask, ExportStartRequest, ProbeResult } from "../src/shared/ipc
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "media",
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+    },
   },
 ]);
 
@@ -71,6 +77,7 @@ function pick<T extends string>(value: string | undefined, allowed: readonly T[]
 interface ParsedArgs {
   smoke: boolean;
   cli: boolean;
+  guiCheck: boolean;
   cliError: string | null;
   input: string | null;
   output: string | null;
@@ -83,12 +90,15 @@ function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   let cli = false;
   let smoke = false;
+  let guiCheck = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--cli") {
       cli = true;
     } else if (arg === "--smoke") {
       smoke = true;
+    } else if (arg === "--gui-check") {
+      guiCheck = true;
     } else if (arg.startsWith("--")) {
       const equals = arg.indexOf("=");
       if (equals > 0) {
@@ -108,7 +118,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       positional.push(arg);
     }
   }
-  const input = map.get("input") ?? map.get("i") ?? (positional.length > 0 ? positional[0] : null);
+  const positionalFile = positional.find((candidate) => {
+    try {
+      return fs.statSync(path.resolve(candidate)).isFile();
+    } catch {
+      return false;
+    }
+  });
+  const input = map.get("input") ?? map.get("i") ?? positionalFile ?? null;
   const output = map.get("output") ?? map.get("o") ?? null;
   const rawColumns = Number(map.get("columns") ?? "110");
   const rawContrast = Number(map.get("contrast") ?? "1");
@@ -130,6 +147,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   return {
     smoke,
     cli,
+    guiCheck,
     cliError,
     input: input ? path.resolve(input) : null,
     output: output ? path.resolve(output) : null,
@@ -586,12 +604,19 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
-    protocol.handle("media", (request) => {
+    protocol.handle("media", async (request) => {
       try {
         const url = new URL(request.url);
         const filePath = decodeURIComponent(url.pathname.replace(/^\//, ""));
         if (!path.isAbsolute(filePath)) return new Response("bad request", { status: 400 });
-        return net.fetch(pathToFileURL(filePath).toString());
+        const response = await net.fetch(pathToFileURL(filePath).toString());
+        const headers = new Headers(response.headers);
+        headers.set("Access-Control-Allow-Origin", "*");
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
       } catch {
         return new Response("bad request", { status: 400 });
       }
@@ -640,6 +665,35 @@ if (!gotSingleInstanceLock) {
           console.error("SMOKE FAIL renderer");
           app.exit(1);
         }
+      });
+      return;
+    }
+
+    if (parsed.guiCheck && parsed.input) {
+      const window = createWindow(true);
+      window.webContents.on("did-finish-load", () => {
+        window.webContents.send("app:open-path", parsed.input as string);
+        const started = Date.now();
+        const timer = setInterval(() => {
+          window.webContents
+            .executeJavaScript(`document.querySelector('.output-stats')?.textContent ?? ''`)
+            .then((stats: string) => {
+              if (stats && !stats.includes("等待")) {
+                clearInterval(timer);
+                console.log(`GUI-CHECK OK ${stats}`);
+                app.exit(0);
+              } else if (Date.now() - started > 10000) {
+                clearInterval(timer);
+                console.error("GUI-CHECK FAIL: no preview");
+                app.exit(1);
+              }
+            })
+            .catch((error) => {
+              clearInterval(timer);
+              console.error(`GUI-CHECK FAIL: ${String(error)}`);
+              app.exit(1);
+            });
+        }, 500);
       });
       return;
     }

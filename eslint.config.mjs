@@ -12,6 +12,7 @@ export default tseslint.config(
       "resources/**",
       "build/**",
       "scripts/**",
+      "test/**",
     ],
   },
   js.configs.recommended,

@@ -779,53 +779,57 @@ export default function AsciiStudio() {
   }, []);
 
   const applyRender = useCallback(() => {
-    const { options: appliedOptions, channel: appliedChannel } = appliedRef.current;
-    const source = captureBitmap(appliedOptions.theme);
-    if (!source) return;
-    const started = performance.now();
-    const effectiveOptions =
-      appliedChannel === "density"
-        ? appliedOptions
-        : { ...appliedOptions, halfBlock: false };
-    const metrics = canvasFontMetrics();
-    const aspectFactor = metrics.charWEm / 1.22;
-    const converted = convertBitmap(source, effectiveOptions, aspectFactor);
-    let plan: DualPlan | null = null;
-    if (appliedChannel !== "density") {
-      const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
-      const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
-      plan =
-        appliedChannel === "dual"
-          ? planDualLUT(
-              converted.toned,
-              converted.columns,
-              converted.sampleRows,
-              dualLUT,
-              effectiveOptions.dither,
-            )
-          : planLuminanceChannel(
-              converted.toned,
-              converted.columns,
-              converted.sampleRows,
-              RAMPS[appliedOptions.ramp],
-              effectiveOptions.dither,
-              appliedOptions.theme,
-              LUM_LUT,
-            );
+    try {
+      const { options: appliedOptions, channel: appliedChannel } = appliedRef.current;
+      const source = captureBitmap(appliedOptions.theme);
+      if (!source) return;
+      const started = performance.now();
+      const effectiveOptions =
+        appliedChannel === "density"
+          ? appliedOptions
+          : { ...appliedOptions, halfBlock: false };
+      const metrics = canvasFontMetrics();
+      const aspectFactor = metrics.charWEm / 1.22;
+      const converted = convertBitmap(source, effectiveOptions, aspectFactor);
+      let plan: DualPlan | null = null;
+      if (appliedChannel !== "density") {
+        const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
+        const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
+        plan =
+          appliedChannel === "dual"
+            ? planDualLUT(
+                converted.toned,
+                converted.columns,
+                converted.sampleRows,
+                dualLUT,
+                effectiveOptions.dither,
+              )
+            : planLuminanceChannel(
+                converted.toned,
+                converted.columns,
+                converted.sampleRows,
+                RAMPS[appliedOptions.ramp],
+                effectiveOptions.dither,
+                appliedOptions.theme,
+                LUM_LUT,
+              );
+      }
+      const bitmapCanvas = bitmapCanvasRef.current;
+      if (bitmapCanvas) {
+        drawAsciiToCanvas(
+          bitmapCanvas,
+          converted,
+          plan,
+          appliedChannel,
+          appliedOptions.theme,
+          appliedOptions.ramp,
+        );
+      }
+      setOutput(converted);
+      setGeneratedMs(Math.max(1, Math.round(performance.now() - started)));
+    } catch (renderError) {
+      setError(`渲染失败：${String(renderError).slice(0, 400)}`);
     }
-    const bitmapCanvas = bitmapCanvasRef.current;
-    if (bitmapCanvas) {
-      drawAsciiToCanvas(
-        bitmapCanvas,
-        converted,
-        plan,
-        appliedChannel,
-        appliedOptions.theme,
-        appliedOptions.ramp,
-      );
-    }
-    setOutput(converted);
-    setGeneratedMs(Math.max(1, Math.round(performance.now() - started)));
   }, [captureBitmap]);
 
   useEffect(() => {
@@ -1307,6 +1311,7 @@ export default function AsciiStudio() {
                 <img
                   ref={imageRef}
                   src={media.kind === "video" ? (media.frameUrl ?? "") : media.url}
+                  crossOrigin="anonymous"
                   alt=""
                   className="media-preview-image"
                   onLoad={(event) => {
@@ -1325,9 +1330,10 @@ export default function AsciiStudio() {
                 <video
                   ref={videoRef}
                   src={media.url}
+                  crossOrigin="anonymous"
                   muted
                   playsInline
-                  preload="none"
+                  preload="metadata"
                   poster={posterUrl ?? undefined}
                   className="media-preview-video"
                   onLoadedMetadata={(event) => {
