@@ -17,41 +17,42 @@ function New-RoundedPath {
   return $path
 }
 
+# 版画工坊 1.4 图标:黑木台 + 黄铜细边 + 朱砂方印(纸白"工"字)
 $master = New-Object System.Drawing.Bitmap 256, 256
 $g = [System.Drawing.Graphics]::FromImage($master)
 $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
 $g.Clear([System.Drawing.Color]::Transparent)
 
-$dark = [System.Drawing.Color]::FromArgb(255, 15, 20, 14)
-$phosphor = [System.Drawing.Color]::FromArgb(255, 198, 232, 138)
-$amber = [System.Drawing.Color]::FromArgb(255, 226, 161, 59)
-$line = [System.Drawing.Color]::FromArgb(110, 198, 232, 138)
+$bench  = [System.Drawing.Color]::FromArgb(255, 22, 19, 16)
+$brass  = [System.Drawing.Color]::FromArgb(255, 180, 145, 79)
+$cinnabar = [System.Drawing.Color]::FromArgb(255, 194, 63, 38)
+$paper  = [System.Drawing.Color]::FromArgb(255, 244, 238, 218)
 
+# 台底
 $bgPath = New-RoundedPath -X 8 -Y 8 -W 240 -H 240 -R 48
-$bgBrush = New-Object System.Drawing.SolidBrush $dark
+$bgBrush = New-Object System.Drawing.SolidBrush $bench
 $g.FillPath($bgBrush, $bgPath)
-$borderPen = New-Object System.Drawing.Pen($line, 5)
+$borderPen = New-Object System.Drawing.Pen($brass, 6)
 $g.DrawPath($borderPen, $bgPath)
 
-# 品牌记号：左侧 ▚（左上+右下），右侧 ▞（右上+左下）
-$cell = 34
-$gap = 4
-$leftX = 58
-$rightX = 58 + ($cell * 2 + $gap) + 18
-$y = 70
-$quadrant = $cell - 2
+# 朱砂方印(直角,真实印章)
+$sealX = 64
+$sealY = 64
+$sealW = 128
+$sealBrush = New-Object System.Drawing.SolidBrush $cinnabar
+$g.FillRectangle($sealBrush, $sealX, $sealY, $sealW, $sealW)
+$innerPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(120, 244, 238, 218), 4)
+$g.DrawRectangle($innerPen, $sealX + 8, $sealY + 8, $sealW - 16, $sealW - 16)
 
-$fillBrush = New-Object System.Drawing.SolidBrush $phosphor
-# 左侧 ▚
-$g.FillRectangle($fillBrush, $leftX, $y, $quadrant, $quadrant)
-$g.FillRectangle($fillBrush, $leftX + $cell, $y + $cell, $quadrant, $quadrant)
-# 右侧 ▞
-$g.FillRectangle($fillBrush, $rightX + $cell, $y, $quadrant, $quadrant)
-$g.FillRectangle($fillBrush, $rightX, $y + $cell, $quadrant, $quadrant)
-
-# 底部琥珀细条
-$amberBrush = New-Object System.Drawing.SolidBrush $amber
-$g.FillRectangle($amberBrush, 58, 186, 140, 8)
+# 纸白"工"字(几何笔画:上横短、下横长、竖中贯)
+$paperBrush = New-Object System.Drawing.SolidBrush $paper
+$cx = $sealX + $sealW / 2
+$topY = $sealY + 34
+$bottomY = $sealY + $sealW - 34 - 22
+$g.FillRectangle($paperBrush, $cx - 18, $topY, 36, 22)        # 上横
+$g.FillRectangle($paperBrush, $cx - 10, $topY, 20, 60)        # 竖(与上横相连)
+$g.FillRectangle($paperBrush, $cx - 26, $bottomY, 52, 22)     # 下横
+$g.FillRectangle($paperBrush, $cx - 10, $bottomY - 8, 20, 30) # 竖延伸
 
 $g.Dispose()
 

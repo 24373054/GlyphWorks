@@ -23,6 +23,7 @@ import {
 import TestPattern from "./TestPattern";
 import { demoWoodcut } from "@/lib/demo";
 import { DEFAULT_SIGNATURE, drawSignature } from "@/lib/signature";
+import { hexToRgb, mixRgb } from "@/lib/color";
 import type { CliTask, DuotoneOptions, ProbeResult, SignatureOptions } from "@/shared/ipc";
 
 type MediaKind = "image" | "video";
@@ -160,6 +161,27 @@ function clampProofScale(columns: number, rows: number, requested: number): numb
   return Math.max(1, Math.min(requested, snapped));
 }
 
+/** 字形墨量缓存:按字符集一次测量,重复使用(实时打印每帧不再重测)。 */
+const inkCache = new Map<string, Float32Array>();
+function cachedInks(ramp: string): Float32Array {
+  const cached = inkCache.get(ramp);
+  if (cached) return cached;
+  const inks = measureRampInk(ramp);
+  inkCache.set(ramp, inks);
+  return inks;
+}
+
+/** 双通道决策表缓存:按 字符集×主题 一次构建,重复使用。 */
+const dualLutCache = new Map<string, Uint8Array>();
+function cachedDualLUT(ramp: string, theme: OutputTheme): Uint8Array {
+  const key = `${ramp}|${theme}`;
+  const cached = dualLutCache.get(key);
+  if (cached) return cached;
+  const lut = buildDualLUT(ramp, cachedInks(ramp), theme);
+  dualLutCache.set(key, lut);
+  return lut;
+}
+
 const IMAGE_EXTS = [
   "png", "jpg", "jpeg", "webp", "gif", "avif", "bmp", "svg", "tif", "tiff", "heic", "heif",
 ];
@@ -177,20 +199,6 @@ function themeAnchors(theme: OutputTheme) {
   return theme === "dark"
     ? { darkest: "#0d0b08", brightest: "#c6e88a" }
     : { darkest: "#241f18", brightest: "#e9e0cd" };
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const value = Number.parseInt(hex.slice(1), 16);
-  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
-}
-
-function mixRgb(
-  a: [number, number, number],
-  b: [number, number, number],
-  t: number,
-): string {
-  const clamp = (v: number) => Math.round(Math.min(255, Math.max(0, v)));
-  return `rgb(${clamp(a[0] + (b[0] - a[0]) * t)},${clamp(a[1] + (b[1] - a[1]) * t)},${clamp(a[2] + (b[2] - a[2]) * t)})`;
 }
 
 /**
@@ -642,8 +650,15 @@ export default function AsciiStudio() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [compareOn, setCompareOn] = useState(false);
   const [compareUrl, setCompareUrl] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | null>(null);
   const [archive, setArchive] = useState<ArchiveEntry[]>(() =>
-    loadJson<ArchiveEntry[]>(ARCHIVE_KEY, []),
+    loadJson<ArchiveEntry[]>(ARCHIVE_KEY, []).filter(
+      (entry) =>
+        entry &&
+        typeof entry.edition === "number" &&
+        entry.options &&
+        typeof entry.options.columns === "number",
+    ),
   );
   const [recent, setRecent] = useState<string[]>(() => loadJson<string[]>(RECENT_KEY, []));
 
@@ -679,6 +694,7 @@ export default function AsciiStudio() {
   const mediaNameRef = useRef("");
   const dragPathRef = useRef<string | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
+  const compareBtnRef = useRef<HTMLButtonElement>(null);
 
   const setOption = useCallback(
     <K extends keyof AsciiOptions>(key: K, value: AsciiOptions[K]) => {
@@ -751,6 +767,7 @@ export default function AsciiStudio() {
       setProofNumber(0);
       setCompareOn(false);
       setCompareUrl(null);
+      setExportFormat(null);
       setZoom(1);
       setPan({ x: 0, y: 0 });
       dragPathRef.current = null;
@@ -1043,8 +1060,7 @@ export default function AsciiStudio() {
       const converted = convertBitmap(source, effectiveOptions, aspectFactor);
       let plan: DualPlan | null = null;
       if (appliedChannel !== "density") {
-        const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
-        const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
+        const dualLUT = cachedDualLUT(RAMPS[appliedOptions.ramp], appliedOptions.theme);
         plan =
           appliedChannel === "dual" || appliedChannel === "duotone"
             ? planDualLUT(
@@ -1146,8 +1162,7 @@ export default function AsciiStudio() {
     const converted = convertBitmap(source, effectiveOptions, aspectFactor);
     let plan: DualPlan | null = null;
     if (channel !== "density") {
-      const inks = measureRampInk(RAMPS[options.ramp]);
-      const dualLUT = buildDualLUT(RAMPS[options.ramp], inks, options.theme);
+      const dualLUT = cachedDualLUT(RAMPS[options.ramp], options.theme);
       plan =
         channel === "dual" || channel === "duotone"
           ? planDualLUT(
@@ -1291,8 +1306,7 @@ export default function AsciiStudio() {
       const effectiveScale = clampProofScale(converted.columns, converted.rows, scale);
       let plan: DualPlan | null = null;
       if (appliedChannel !== "density") {
-        const inks = measureRampInk(RAMPS[appliedOptions.ramp]);
-        const dualLUT = buildDualLUT(RAMPS[appliedOptions.ramp], inks, appliedOptions.theme);
+        const dualLUT = cachedDualLUT(RAMPS[appliedOptions.ramp], appliedOptions.theme);
         plan =
           appliedChannel === "dual" || appliedChannel === "duotone"
             ? planDualLUT(
@@ -1368,6 +1382,9 @@ export default function AsciiStudio() {
       } else {
         setCompareUrl(null);
       }
+    } else {
+      // 关闭对比层后焦点回到触发按钮,键盘路径不丢失
+      compareBtnRef.current?.focus();
     }
     setCompareOn((previous) => !previous);
   }, [compareOn, captureBitmap]);
@@ -1431,8 +1448,7 @@ export default function AsciiStudio() {
         : estimateRows(columns, width, height, false, aspectFactor);
       const textRows = halfBlock ? sampleRows / 2 : sampleRows;
       const canvas = makeExportCanvas(columns, textRows, exportOptions.theme, isGif ? 960 : 1920);
-      const inks = measureRampInk(RAMPS[exportOptions.ramp]);
-      const dualLUT = buildDualLUT(RAMPS[exportOptions.ramp], inks, exportOptions.theme);
+      const dualLUT = cachedDualLUT(RAMPS[exportOptions.ramp], exportOptions.theme);
       const totalFrames = Math.max(1, Math.round(duration * fps));
       if (isGif && totalFrames > 600) {
         return {
@@ -1524,6 +1540,7 @@ export default function AsciiStudio() {
       appliedRef.current = { options, channel };
       setDirty(false);
       setLive(false);
+      setExportFormat(format);
       const result = await runVideoExport({
         outputPath,
         sourcePath: media.path,
@@ -1533,6 +1550,7 @@ export default function AsciiStudio() {
         signature,
         duotone: channel === "duotone" ? duotone : null,
       });
+      setExportFormat(null);
       if (!result.ok && result.error !== "cancelled") {
         setError(`导出失败：${result.error}`);
       }
@@ -1543,6 +1561,7 @@ export default function AsciiStudio() {
   const runCli = useCallback(
     async (task: CliTask) => {
       try {
+        await document.fonts.ready;
         const inputProbe = await window.app.probe(task.input);
         if (!inputProbe.ok || inputProbe.kind === "unknown") {
           throw new Error("无法识别输入文件");
@@ -1566,12 +1585,7 @@ export default function AsciiStudio() {
               : { ...task.options, halfBlock: false };
           const converted = convertBitmap(source, effectiveOptions, aspectFactor);
           if (ext === "png") {
-            const inks = measureRampInk(RAMPS[task.options.ramp]);
-            const dualLUT = buildDualLUT(
-              RAMPS[task.options.ramp],
-              inks,
-              task.options.theme,
-            );
+            const dualLUT = cachedDualLUT(RAMPS[task.options.ramp], task.options.theme);
             let plan: DualPlan | null = null;
             if (task.options.channel !== "density") {
               plan =
@@ -1648,6 +1662,17 @@ export default function AsciiStudio() {
     };
   }, []);
 
+  // 内置等宽字体就绪后重打样一次,保证样张与导出始终使用最终字体
+  useEffect(() => {
+    let cancelled = false;
+    document.fonts.ready.then(() => {
+      if (!cancelled) setRenderVersion((value) => value + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!cliTask || cliStartedRef.current) return;
     cliStartedRef.current = true;
@@ -1655,15 +1680,19 @@ export default function AsciiStudio() {
   }, [cliTask, runCli]);
 
   useEffect(() => {
-    return window.app.onOpenPath((filePath) => {
+    const unsubscribe = window.app.onOpenPath((filePath) => {
       void loadPath(filePath);
     });
+    // 就绪握手:主动拉取首启待打开路径,避免消息早于监听器注册而丢失
+    void window.app.rendererReady();
+    return unsubscribe;
   }, [loadPath]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && compareOn) {
         setCompareOn(false);
+        compareBtnRef.current?.focus();
         return;
       }
       const mod = event.ctrlKey || event.metaKey;
@@ -1697,6 +1726,50 @@ export default function AsciiStudio() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [media, output, live, compareOn, openFromDialog, applyParams, copyText, downloadTxt, downloadPng]);
+
+  // 中文菜单(Alt 呼出)与界面动作同源
+  useEffect(() => {
+    return window.app.onMenuAction((action) => {
+      switch (action) {
+        case "open":
+          void openFromDialog();
+          break;
+        case "stamp":
+          if (media && !(media.kind === "video" && live)) applyParams();
+          break;
+        case "compare":
+          toggleCompare();
+          break;
+        case "zoom-reset":
+          setZoom(1);
+          setPan({ x: 0, y: 0 });
+          break;
+        case "save-txt":
+          if (output || live) void downloadTxt();
+          break;
+        case "save-png":
+          if (media && !exporting?.active) void downloadPng();
+          break;
+        case "export-mp4":
+          if (media?.kind === "video" && !exporting?.active) void exportVideo("mp4");
+          break;
+        case "export-gif":
+          if (media?.kind === "video" && !exporting?.active) void exportVideo("gif");
+          break;
+      }
+    });
+  }, [
+    media,
+    output,
+    live,
+    exporting,
+    openFromDialog,
+    applyParams,
+    toggleCompare,
+    downloadTxt,
+    downloadPng,
+    exportVideo,
+  ]);
 
   // 放大检视:样张上滚轮缩放(需非被动监听才能 preventDefault 阻止页面滚动)
   useEffect(() => {
@@ -1736,7 +1809,7 @@ export default function AsciiStudio() {
     <>
       <header className="studio-header">
         <div className="studio-header-inner">
-          <span className="brand-seal" aria-hidden="true">字符工坊</span>
+          <span className="brand-seal" aria-hidden="true"><i>字</i><i>符</i><i>工</i><i>坊</i></span>
           <span className="brand-name">Glyph Works <em>·</em> Windows 版画台</span>
           <span className="header-note">本地制版 · 图档不出本机</span>
         </div>
@@ -2006,6 +2079,7 @@ export default function AsciiStudio() {
                 max={420}
                 step={5}
                 value={options.columns}
+                aria-valuetext={`${options.columns} 列`}
                 onChange={(event) => setOption("columns", Number(event.target.value))}
               />
             </label>
@@ -2040,6 +2114,7 @@ export default function AsciiStudio() {
                 max={2}
                 step={0.05}
                 value={options.contrast}
+                aria-valuetext={`${options.contrast.toFixed(2)}`}
                 onChange={(event) => setOption("contrast", Number(event.target.value))}
               />
             </label>
@@ -2113,6 +2188,7 @@ export default function AsciiStudio() {
                     max={6}
                     step={1}
                     value={duotone.offset}
+                    aria-valuetext={`${duotone.offset} 像素`}
                     onChange={(event) => changeDuotone("offset", Number(event.target.value))}
                   />
                 </label>
@@ -2215,7 +2291,7 @@ export default function AsciiStudio() {
                   <span className="reg-mark reg-top" aria-hidden="true">+</span>
                   <span className="reg-mark reg-bottom" aria-hidden="true">+</span>
                   <div
-                    className="proof-print"
+                    className={`proof-print ${zoom > 1 ? "is-zoomed" : ""}`}
                     ref={proofPrintRef}
                     onPointerDown={(event) => {
                       if (zoom <= 1) return;
@@ -2313,7 +2389,12 @@ export default function AsciiStudio() {
             )}
           </div>
           <div className="output-actions">
-            <button type="button" className="action-button" disabled={!output || live} onClick={() => void copyText()}>
+            <button
+              type="button"
+              className={`action-button ${copied ? "is-copied" : ""}`}
+              disabled={!output || live}
+              onClick={() => void copyText()}
+            >
               {copied ? "已复制" : "复制字符"}
             </button>
             <button type="button" className="action-button" disabled={!output && !live} onClick={() => void downloadTxt()}>
@@ -2323,10 +2404,10 @@ export default function AsciiStudio() {
               type="button"
               className="action-button drag-png"
               draggable
-              disabled={!output && !live}
+              disabled={(!output && !live) || Boolean(exporting?.active)}
               title="点击另存为；按住拖到桌面或文件夹，直接保存当前精度 PNG"
               onPointerDown={() => {
-                if (!dragPathRef.current) {
+                if (!dragPathRef.current && !exporting?.active) {
                   void prepareDragPng().then((path) => {
                     if (path) dragPathRef.current = path;
                   });
@@ -2343,6 +2424,7 @@ export default function AsciiStudio() {
               存 PNG
             </button>
             <button
+              ref={compareBtnRef}
               type="button"
               className={`action-button ${compareOn ? "is-active" : ""}`}
               disabled={!media}
@@ -2358,7 +2440,7 @@ export default function AsciiStudio() {
                 disabled={(!output && !live) || Boolean(exporting?.active)}
                 onClick={() => void exportVideo("mp4")}
               >
-                {exporting?.active ? "正在导出…" : "导出 MP4（原帧率）"}
+                {exportFormat === "mp4" && exporting?.active ? "正在导出 MP4…" : "导出 MP4（原帧率）"}
               </button>
             )}
             {isVideo && (
@@ -2369,7 +2451,7 @@ export default function AsciiStudio() {
                 title="上限 960px / 15fps / 600 帧"
                 onClick={() => void exportVideo("gif")}
               >
-                导出 GIF 动图
+                {exportFormat === "gif" && exporting?.active ? "正在导出 GIF…" : "导出 GIF 动图"}
               </button>
             )}
             {exporting?.active && (
@@ -2380,6 +2462,7 @@ export default function AsciiStudio() {
                   exportCancelRef.current = true;
                   const id = exportSessionRef.current;
                   if (id) void window.app.cancelExport(id);
+                  setExportFormat(null);
                 }}
               >
                 取消导出
@@ -2401,6 +2484,7 @@ export default function AsciiStudio() {
                     : exporting.phase === "render"
                       ? "印刷 · 字符帧"
                       : "装订 · 编码成片"}
+                  {exportFormat ? `（${exportFormat.toUpperCase()}）` : ""}
                 </strong>
                 <span>{Math.round((exporting.progress ?? 0) * 100)}%</span>
               </div>
@@ -2413,9 +2497,8 @@ export default function AsciiStudio() {
             </div>
           )}
           <p className="output-note">
-            亮度类通道为每个字符独立计算灰度；双色套印把背景与前景分别映射到两种墨色（可选错位偏移）。复制与 TXT 为密度版文本，PNG 与 MP4 按当前通道渲染并盖上落款。
-            样张上滚轮可放大检视、按住拖动平移、双击复位。存 PNG 可拖到桌面直接保存，精度由「成作精度」决定。
-            导出由内置 FFmpeg 先本地解码全部画面帧（制版），再按原帧率编码为 H.264 MP4（成片，含原声，零丢帧）；GIF 动图上限 960px / 15fps / 600 帧。
+            亮度类通道为每个字符独立计算灰度；双色套印把背景与前景分别映射到两种墨色（可选错位偏移）。复制与 TXT 为密度版文本，PNG / MP4 / GIF 按当前通道渲染并盖上落款。
+            样张上滚轮放大检视、按住拖动平移、双击复位；存 PNG 可拖到桌面直接保存。MP4 原帧率含原声零丢帧，GIF 动图上限 960px / 15fps / 600 帧。
           </p>
         </div>
 
@@ -2440,7 +2523,7 @@ export default function AsciiStudio() {
                   className="archive-card"
                   role="button"
                   tabIndex={0}
-                  title={`第 ${entry.edition} 版 · ${entry.mediaName} · 点击复原参数`}
+                  title={`第 ${entry.edition} 版 · ${entry.mediaName} · ${new Date(entry.createdAt).toLocaleString("zh-CN", { hour12: false })} · 点击复原参数`}
                   onClick={() => restoreEntry(entry)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {

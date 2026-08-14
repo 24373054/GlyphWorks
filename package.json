@@ -1,6 +1,6 @@
 {
   "name": "08-ascii-win",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "字符工坊 GlyphWorks Windows 版：图片/视频一键生成 ASCII 字符画",
   "author": "KEENTROPY",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "verify": "npm run lint && npm run typecheck && npm run build",
-    "icon": "node scripts/make-icons.mjs",
+    "icon": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-icons.ps1 && node scripts/make-icons.mjs",
     "smoke": "electron . --smoke",
     "dist": "npm run icon && electron-vite build && electron-builder --win nsis",
     "dist:dir": "npm run icon && electron-vite build && electron-builder --win dir"

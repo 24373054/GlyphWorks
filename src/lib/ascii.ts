@@ -62,7 +62,7 @@ export const RAMPS: Record<RampId, string> = {
 };
 
 export const FONT_STACK =
-  '"Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace';
+  '"JetBrains Mono", "Cascadia Code", Consolas, monospace';
 
 export type ImageDataLike = {
   data: Uint8ClampedArray;

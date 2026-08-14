@@ -1,8 +1,17 @@
 /* ============================================================
-   GlyphWorks 1.1.0 · 版画工坊设计系统
+   GlyphWorks 1.4.0 · 版画工坊设计系统
    概念:黑木工作台 + 纸样打样 + 朱砂印
    原则:磷光绿只属于作品(字符输出),不属于家具(界面)
+   内置字体:JetBrains Mono(OFL),字符画跨机器像素级一致
    ============================================================ */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../assets/fonts/JetBrainsMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   /* 工作台(暖黑木) */
@@ -18,9 +27,8 @@
   /* 纸与墨 */
   --paper: #e9e0cd;
   --paper-bright: #f4eeda;
-  --ink: #241f18;
   --text: #e8dfc8;
-  --muted: #9c9077;
+  --muted: #a89d85;
   /* 朱砂(唯一强调色) */
   --cinnabar: #c23f26;
   --cinnabar-deep: #9e3320;
@@ -30,9 +38,13 @@
   /* 字体:宋体=版画骨相,楷体=手刻,无衬线=正文,等宽=仪表 */
   --serif: "Source Han Serif SC", "Noto Serif SC", "STZhongsong", "SimSun", serif;
   --kai: "KaiTi", "STKaiti", "DFKai-SB", serif;
-  --sans: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
-  --mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
   --max: 1180px;
+  /* 动效时长令牌 */
+  --dur-fast: 120ms;
+  --dur: 160ms;
+  --dur-slow: 240ms;
 }
 
 * {
@@ -76,6 +88,16 @@ button {
   outline-offset: 2px;
 }
 
+/* 控件区不可拖选,保持仪器手感;数据文本仍可选中复制 */
+button,
+label,
+.preset-chip,
+.archive-card,
+.segmented,
+.dropzone {
+  user-select: none;
+}
+
 /* ------------------------------------------------------------
    头部:印章 logo + 铭牌
    ------------------------------------------------------------ */
@@ -91,12 +113,13 @@ button {
   gap: 14px;
   width: min(var(--max), calc(100% - 40px));
   margin: 0 auto;
-  padding: 14px 0;
+  padding: 16px 0;
 }
 
 .brand-seal {
   display: inline-flex;
   flex: 0 0 auto;
+  flex-direction: column;
   width: 40px;
   height: 40px;
   align-items: center;
@@ -105,16 +128,19 @@ button {
   color: var(--paper-bright);
   font-family: var(--kai);
   font-size: 11px;
-  line-height: 1.06;
-  letter-spacing: 0.08em;
-  writing-mode: vertical-rl;
   box-shadow: inset 0 0 0 1px rgba(244, 238, 218, 0.22), 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+
+.brand-seal i {
+  display: block;
+  font-style: normal;
+  line-height: 1.15;
 }
 
 .brand-name {
   font-family: var(--mono);
   font-size: 12px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--paper-bright);
 }
@@ -128,7 +154,6 @@ button {
   margin-left: auto;
   color: var(--muted);
   font-size: 11px;
-  letter-spacing: 0.1em;
 }
 
 /* ------------------------------------------------------------
@@ -142,7 +167,7 @@ button {
   align-items: center;
   width: min(var(--max), calc(100% - 40px));
   margin: 0 auto;
-  padding: 72px 0 60px;
+  padding: 64px 0 56px;
 }
 
 .eyebrow {
@@ -160,8 +185,8 @@ button {
   font-size: clamp(28px, 4.4vw, 46px);
   font-weight: 600;
   line-height: 1.28;
-  letter-spacing: 0.03em;
   color: var(--paper-bright);
+  text-rendering: optimizeLegibility;
 }
 
 .cursor-block {
@@ -223,7 +248,8 @@ button {
   overflow: hidden;
   border: 1px solid var(--line-strong);
   background: var(--bench-deep);
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  cursor: pointer;
+  transition: border-color var(--dur-slow) ease, box-shadow var(--dur-slow) ease;
 }
 
 .dropzone:hover,
@@ -260,7 +286,6 @@ button {
   font-family: var(--serif);
   font-size: 19px;
   font-weight: 600;
-  letter-spacing: 0.1em;
   color: var(--paper-bright);
 }
 
@@ -299,12 +324,18 @@ button {
   align-items: center;
   gap: 10px;
   width: min(var(--max), calc(100% - 40px));
-  margin: -22px auto 0;
+  margin: -20px auto 0;
   padding: 12px 16px;
   border: 1px solid rgba(194, 63, 38, 0.55);
   background: rgba(194, 63, 38, 0.1);
-  color: #e8b3a4;
+  color: #f0c4b6;
   font-size: 13px;
+  animation: error-in var(--dur-slow) ease-out both;
+}
+
+@keyframes error-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .error-dot {
@@ -322,11 +353,11 @@ button {
 .studio {
   display: grid;
   grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.15fr);
-  gap: 22px;
+  gap: 20px;
   align-items: start;
   width: min(var(--max), calc(100% - 40px));
   margin: 0 auto;
-  padding: 16px 0 66px;
+  padding: 16px 0 64px;
 }
 
 .studio-panel {
@@ -336,14 +367,14 @@ button {
 }
 
 .controls-panel {
-  padding: 22px;
+  padding: 20px;
 }
 
 .output-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 22px;
+  padding: 20px;
 }
 
 .section-title {
@@ -354,7 +385,6 @@ button {
   font-family: var(--serif);
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.08em;
   color: var(--paper-bright);
 }
 
@@ -366,7 +396,7 @@ button {
 }
 
 .panel-section + .panel-section {
-  margin-top: 22px;
+  margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid var(--line);
 }
@@ -375,7 +405,7 @@ button {
 
 .media-preview {
   position: relative;
-  margin-top: 14px;
+  margin-top: 16px;
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--bench-deep);
@@ -400,6 +430,7 @@ button {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .media-meta span {
@@ -409,7 +440,7 @@ button {
 }
 
 .panel-empty {
-  margin-top: 14px;
+  margin-top: 16px;
   padding: 26px 18px;
   border: 1px dashed var(--line-strong);
   color: var(--muted);
@@ -429,8 +460,8 @@ button {
 .video-controls {
   display: grid;
   gap: 14px;
-  margin-top: 18px;
-  padding-top: 18px;
+  margin-top: 16px;
+  padding-top: 16px;
   border-top: 1px solid var(--line);
 }
 
@@ -449,7 +480,7 @@ button {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
 }
 
 .segmented button.is-active {
@@ -463,7 +494,7 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 .preset-chip {
@@ -473,8 +504,7 @@ button {
   color: var(--muted);
   font-family: var(--kai);
   font-size: 13px;
-  letter-spacing: 0.06em;
-  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  transition: border-color var(--dur) ease, color var(--dur) ease, background var(--dur) ease;
 }
 
 .preset-chip:hover {
@@ -510,7 +540,6 @@ button {
 
 .field > span {
   color: var(--muted);
-  letter-spacing: 0.04em;
 }
 
 .field em {
@@ -518,6 +547,7 @@ button {
   color: var(--brass);
   font-family: var(--mono);
   font-style: normal;
+  font-variant-numeric: tabular-nums;
 }
 
 .field input[type="range"] {
@@ -532,11 +562,6 @@ button {
   background: var(--bench-deep);
   color: var(--paper-bright);
   font-size: 12px;
-}
-
-.field select:focus {
-  outline: 1px solid var(--brass);
-  outline-offset: -1px;
 }
 
 .field-row {
@@ -563,8 +588,8 @@ button {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-top: 22px;
-  padding-top: 18px;
+  margin-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid var(--line);
 }
 
@@ -575,9 +600,9 @@ button {
   color: var(--paper-bright);
   font-family: var(--kai);
   font-size: 16px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.06em;
   box-shadow: inset 0 0 0 1px rgba(244, 238, 218, 0.16), 0 2px 10px rgba(0, 0, 0, 0.35);
-  transition: background 0.16s ease, transform 0.1s ease, box-shadow 0.16s ease;
+  transition: background var(--dur) ease, transform var(--dur-fast) ease, box-shadow var(--dur) ease;
 }
 
 .seal-button:hover:not(:disabled) {
@@ -605,9 +630,8 @@ button {
 .apply-hint {
   color: var(--brass);
   font-size: 11px;
-  letter-spacing: 0.04em;
   opacity: 0;
-  transition: opacity 0.25s ease;
+  transition: opacity var(--dur-slow) ease;
 }
 
 .apply-hint.is-visible {
@@ -630,13 +654,14 @@ button {
   font-family: var(--mono);
   font-size: 10.5px;
   letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
 }
 
 .proof-sheet {
   position: relative;
   display: flex;
   flex-direction: column;
-  margin-top: 14px;
+  margin-top: 16px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
   background: var(--bench-deep);
@@ -651,12 +676,12 @@ button {
 
 .proof-mat[data-theme="dark"] {
   background: #0d0b08;
-  --mark: rgba(198, 232, 138, 0.42);
+  --mark: rgba(198, 232, 138, 0.5);
 }
 
 .proof-mat[data-theme="light"] {
   background: var(--paper);
-  --mark: rgba(36, 31, 24, 0.55);
+  --mark: rgba(36, 31, 24, 0.6);
 }
 
 /* 角线:裁切标记 */
@@ -722,14 +747,19 @@ button {
   object-fit: contain;
 }
 
-/* 压印揭示动画:行式印刷 */
+/* 压印揭示动画:行式印刷,末尾轻微沉降 */
 .proof-print.is-printing {
-  animation: proof-reveal 380ms steps(14, end) both;
+  animation: proof-reveal 420ms steps(16, end) both, proof-settle 180ms 260ms ease-out both;
 }
 
 @keyframes proof-reveal {
   from { clip-path: inset(0 0 100% 0); }
   to { clip-path: inset(0 0 0 0); }
+}
+
+@keyframes proof-settle {
+  from { opacity: 0.94; }
+  to { opacity: 1; }
 }
 
 /* 铭牌落款 */
@@ -738,7 +768,7 @@ button {
   align-items: baseline;
   justify-content: space-between;
   gap: 14px;
-  padding: 9px 14px;
+  padding: 8px 12px;
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
@@ -747,7 +777,7 @@ button {
   color: var(--brass);
   font-family: var(--kai);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
@@ -796,10 +826,14 @@ button {
 /* 输出操作 */
 
 .output-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
   gap: 10px;
   margin-top: 16px;
+}
+
+.output-actions .action-button {
+  text-align: center;
 }
 
 .action-button {
@@ -809,13 +843,21 @@ button {
   color: var(--paper-bright);
   font-family: var(--mono);
   font-size: 11.5px;
-  letter-spacing: 0.08em;
-  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  letter-spacing: 0.04em;
+  transition: border-color var(--dur) ease, color var(--dur) ease, background var(--dur) ease,
+    transform var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 
 .action-button:hover:not(:disabled) {
   border-color: var(--brass);
   color: var(--brass);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.action-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .action-button:disabled {
@@ -842,6 +884,7 @@ button {
   font-family: var(--mono);
   font-size: 10.5px;
   letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
 }
 
 .export-bar-head strong {
@@ -859,7 +902,7 @@ button {
   display: block;
   height: 100%;
   background: linear-gradient(90deg, var(--cinnabar), var(--brass));
-  transition: width 0.2s linear;
+  transition: width var(--dur) linear;
 }
 
 .output-note {
@@ -881,14 +924,14 @@ button {
 .studio-footer p {
   width: min(var(--max), calc(100% - 40px));
   margin: 0 auto;
-  padding: 18px 0 0;
+  padding: 20px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.8;
 }
 
 .studio-footer .shortcut-row {
-  padding: 8px 0 28px;
+  padding: 12px 0 32px;
   font-size: 11px;
 }
 
@@ -965,11 +1008,11 @@ button {
 }
 
 .text-input::placeholder {
-  color: rgba(156, 144, 119, 0.55);
+  color: rgba(168, 157, 133, 0.55);
 }
 
 .recent {
-  margin-top: 18px;
+  margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
@@ -984,7 +1027,6 @@ button {
 .recent-title {
   color: var(--muted);
   font-size: 11px;
-  letter-spacing: 0.16em;
 }
 
 .recent-clear,
@@ -1019,7 +1061,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: border-color 0.2s ease, color 0.2s ease;
+  transition: border-color var(--dur) ease, color var(--dur) ease;
 }
 
 .recent-list button:hover {
@@ -1040,10 +1082,24 @@ button {
   font-size: 10.5px;
   letter-spacing: 0.08em;
   pointer-events: none;
+  animation: chip-in var(--dur) ease-out both;
+}
+
+@keyframes chip-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .proof-print canvas {
   transform-origin: center center;
+}
+
+.proof-print.is-zoomed {
+  cursor: grab;
+}
+
+.proof-print.is-zoomed:active {
+  cursor: grabbing;
 }
 
 .compare-overlay {
@@ -1089,6 +1145,16 @@ button {
   color: var(--paper-bright);
 }
 
+.action-button.is-copied {
+  border-color: var(--brass);
+  animation: copied-pulse 480ms ease-out 2;
+}
+
+@keyframes copied-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(180, 145, 79, 0); }
+  40% { box-shadow: 0 0 0 3px rgba(180, 145, 79, 0.35); }
+}
+
 .action-button.drag-png {
   cursor: grab;
 }
@@ -1099,7 +1165,7 @@ button {
 
 .archive-panel {
   grid-column: 1 / -1;
-  padding: 20px 22px 22px;
+  padding: 20px;
 }
 
 .archive-head {
@@ -1131,13 +1197,14 @@ button {
   border: 1px solid var(--line);
   background: var(--panel-2);
   cursor: pointer;
-  transition: border-color 0.2s ease, transform 0.16s ease;
+  transition: border-color var(--dur) ease, transform var(--dur) ease, box-shadow var(--dur) ease;
 }
 
 .archive-card:hover,
 .archive-card:focus-visible {
   border-color: var(--brass);
   transform: translateY(-2px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.3);
 }
 
 .archive-card img {
@@ -1154,7 +1221,7 @@ button {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1172,6 +1239,13 @@ button {
   color: var(--muted);
   font-size: 12px;
   line-height: 1;
+  opacity: 0;
+  transition: opacity var(--dur) ease, border-color var(--dur) ease, color var(--dur) ease;
+}
+
+.archive-card:hover .archive-del,
+.archive-del:focus-visible {
+  opacity: 1;
 }
 
 .archive-del:hover {
@@ -1182,6 +1256,16 @@ button {
 /* ------------------------------------------------------------
    响应式与动效降级
    ------------------------------------------------------------ */
+
+@media (max-width: 1240px) {
+  .hero {
+    gap: 36px;
+  }
+
+  .studio {
+    gap: 16px;
+  }
+}
 
 @media (max-width: 900px) {
   .hero {
@@ -1231,14 +1315,22 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .cursor-block,
-  .proof-print.is-printing {
+  .proof-print.is-printing,
+  .error-bar,
+  .zoom-chip,
+  .action-button.is-copied {
     animation: none;
   }
 
   .dropzone,
   .action-button,
   .preset-chip,
-  .seal-button {
+  .seal-button,
+  .archive-card,
+  .archive-del,
+  .recent-list button,
+  .apply-hint,
+  .export-bar-fill {
     transition: none;
   }
 }

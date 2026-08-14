@@ -45,6 +45,12 @@ const api: AppApi = {
     ipcRenderer.on("app:open-path", listener);
     return () => ipcRenderer.removeListener("app:open-path", listener);
   },
+  onMenuAction: (callback) => {
+    const listener = (_event: unknown, action: string) => callback(action);
+    ipcRenderer.on("app:menu-action", listener);
+    return () => ipcRenderer.removeListener("app:menu-action", listener);
+  },
+  rendererReady: () => ipcRenderer.invoke("app:renderer-ready") as Promise<void>,
   cliTask: () => ipcRenderer.invoke("app:cli-task") as Promise<CliTask | null>,
   cliDone: (code, message) => ipcRenderer.send("app:cli-done", code, message),
   showItemInFolder: (filePath) => ipcRenderer.send("app:show-item", filePath),

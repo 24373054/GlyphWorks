@@ -82,7 +82,7 @@ export default function TestPattern({ className = "" }: { className?: string }) 
         raf = 0;
         return;
       }
-      if (time - lastFrame >= 1000 / 12) {
+      if (time - lastFrame >= 1000 / 15) {
         phase = Math.sin(time * 0.0006) * 0.03;
         draw(time, true);
         lastFrame = time;

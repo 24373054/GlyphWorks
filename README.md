@@ -16,6 +16,7 @@
 - 1.1.0「版画工坊」界面：黑木工作台 + 纸样打样 + 朱砂印；六套策展预设、盖印揭示动画、样张角线与铭牌、首启示例、键盘快捷键、导出进度条。
 - 1.2.0「从打样到成作」：落款钤印（自定义印章字与题款，覆盖预览 / PNG / MP4 / CLI）；PNG 成作精度 1×/2×/4×（像素上限保护）；样张档案（版次卡一键复原参数）；放大检视与原图对比；最近文件（含 Windows 跳转列表）；拖出保存。
 - 1.3.0「套色」：双色套印通道（4 套策展配色 + 自定义取色 + 错位滑杆，覆盖预览 / PNG / MP4 / CLI）；GIF 字符动图（视频→GIF，上限 960px / 15fps / 600 帧）。
+- 1.4.0「细修」：内置 JetBrains Mono 等宽字体（字符画跨机器像素级一致）；中文字距清理与 4px 间距节奏；渲染缓存（实时打印单帧提速）；对比度与焦点环统一；盖印/缩放/错误条动效调优；中文应用菜单与新图标；触控板缩放锁定。
 
 ## 运行与安装
 
@@ -26,7 +27,7 @@ npm install
 npm run dev
 ```
 
-构建与打包（产物为**单一安装包** `dist\GlyphWorks-1.3.0-Setup.exe`，内置 Electron 与 FFmpeg，用户无需另装任何东西）：
+构建与打包（产物为**单一安装包** `dist\GlyphWorks-1.4.0-Setup.exe`，内置 Electron 与 FFmpeg，用户无需另装任何东西）：
 
 ```powershell
 npm run dist
@@ -70,11 +71,18 @@ npm run build
 npx electron . --shot shot   # 生成 shot-hero-empty / shot-studio-empty / shot-studio-working / shot-studio-stamped / shot-studio-compare
 ```
 
-项目结构：`electron/`（主进程、preload 桥、FFmpeg 子进程封装）、`src/lib/ascii.ts`（07 原样复用的纯算法库）、`src/lib/demo.ts`（首启示例的程序化木版画）、`src/components/`（界面与导出管线）、`resources/ffmpeg/`（随包内置的 ffmpeg.exe / ffprobe.exe，未提交二进制，从本机 FFMPEG 目录复制）。
+项目结构：`electron/`（主进程、preload 桥、FFmpeg 子进程封装）、`src/lib/ascii.ts`（07 原样复用的纯算法库）、`src/lib/color.ts`（渲染层颜色工具）、`src/lib/demo.ts`（首启示例的程序化木版画）、`src/lib/signature.ts`（落款钤印）、`src/assets/fonts/`（内置 JetBrains Mono，OFL 许可随附）、`src/components/`（界面与导出管线）、`resources/ffmpeg/`（随包内置的 ffmpeg.exe / ffprobe.exe，未提交二进制，从本机 FFMPEG 目录复制）。
+
+字体覆盖校验（零依赖，解析 cmap 表）：
+
+```powershell
+node .\scripts\check-font.mjs .\src\assets\fonts\JetBrainsMono-Regular.ttf
+```
 
 ## 许可与隐私
 
 - 本项目代码 MIT。
 - 随包内置的 FFmpeg 为 gyan.dev LGPL 静态构建，许可文本见 `resources/ffmpeg/LICENSE.txt`，源码获取途径见 `resources/ffmpeg/README.txt`。
+- 内置 JetBrains Mono 字体为 SIL Open Font License 1.1，许可文本见 `src/assets/fonts/OFL.txt`。
 - 所有转换都在本机完成，不采集、不上传任何文件；请勿处理真实敏感资料。
 - 安装包未做商业代码签名，首次运行可能触发 SmartScreen 提示（选择“仍要运行”即可）。

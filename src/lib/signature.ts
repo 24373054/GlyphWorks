@@ -15,7 +15,7 @@ const SEAL_BG = "#c23f26";
 const SEAL_BORDER = "rgba(244, 238, 218, 0.4)";
 const SEAL_INK = "#f4eeda";
 const KAI_STACK = '"KaiTi", "STKaiti", "DFKai-SB", serif';
-const MONO_STACK = '"Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace';
+const MONO_STACK = '"JetBrains Mono", "Cascadia Code", Consolas, monospace';
 
 /**
  * 把落款盖到画布上(右下角方印 + 左下缘题款)。

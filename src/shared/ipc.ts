@@ -97,6 +97,8 @@ export interface AppApi {
   cancelExport(sessionId: string): Promise<void>;
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
   onOpenPath(callback: (path: string) => void): () => void;
+  onMenuAction(callback: (action: string) => void): () => void;
+  rendererReady(): Promise<void>;
   cliTask(): Promise<CliTask | null>;
   cliDone(code: number, message?: string): void;
   showItemInFolder(path: string): void;

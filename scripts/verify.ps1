@@ -26,6 +26,23 @@ node node_modules\electron-vite\bin\electron-vite.js build
 if ($LASTEXITCODE -ne 0) { throw "electron-vite build failed" }
 
 if ($Full) {
+  $electron = node_modules\electron\dist\electron.exe
+
+  Write-Host "== smoke ==" -ForegroundColor Cyan
+  & $electron . --smoke
+  if ($LASTEXITCODE -ne 0) { throw "smoke failed" }
+
+  Write-Host "== shot review ==" -ForegroundColor Cyan
+  & $electron . --shot shot
+  if ($LASTEXITCODE -ne 0) { throw "shot capture failed" }
+  Remove-Item shot-*.png -Force -ErrorAction SilentlyContinue
+
+  if (Test-Path test\gui-check.png) {
+    Write-Host "== gui-check ==" -ForegroundColor Cyan
+    & $electron . --gui-check test\gui-check.png
+    if ($LASTEXITCODE -ne 0) { throw "gui-check failed" }
+  }
+
   Write-Host "== dir package ==" -ForegroundColor Cyan
   node node_modules\electron-builder\out\cli\cli.js --win dir
   if ($LASTEXITCODE -ne 0) { throw "electron-builder dir failed" }

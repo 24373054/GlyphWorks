@@ -4,6 +4,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Menu,
   net,
   protocol,
   shell,
@@ -241,7 +242,7 @@ function createWindow(hidden: boolean): BrowserWindow {
     show: false,
     backgroundColor: "#100d0a",
     autoHideMenuBar: true,
-    title: "字符工坊 GlyphWorks",
+    title: `字符工坊 GlyphWorks v${app.getVersion()}`,
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
@@ -253,6 +254,8 @@ function createWindow(hidden: boolean): BrowserWindow {
     },
   });
   mainWindow = window;
+  // 桌面应用不做页面缩放:触控板双指缩放会破坏版式,锁定 1:1
+  window.webContents.setVisualZoomLevelLimits(1, 1);
   window.once("ready-to-show", () => {
     if (!hidden) window.show();
   });
@@ -626,6 +629,17 @@ function registerIpc(): void {
 
   ipcMain.handle("app:cli-task", () => cliTaskValue);
 
+  // 渲染器就绪握手:把待打开的首启路径投递过去(比 did-finish-load 直推更可靠,无竞态)
+  ipcMain.handle("app:renderer-ready", () => {
+    if (firstLaunchPath) {
+      const pending = firstLaunchPath;
+      firstLaunchPath = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("app:open-path", pending);
+      }
+    }
+  });
+
   ipcMain.on("app:cli-done", (_event, code: number, message?: string) => {
     cliFinished = true;
     if (code === 0) {
@@ -663,6 +677,60 @@ function registerIpc(): void {
   });
 }
 
+/** 中文应用菜单:通过 menu-action 消息驱动渲染器,快捷键与界面一致。 */
+function buildMenu(): void {
+  const send = (action: string) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("app:menu-action", action);
+    }
+  };
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: "文件",
+      submenu: [
+        { label: "选稿…", accelerator: "CmdOrCtrl+O", click: () => send("open") },
+        { type: "separator" },
+        { label: "退出", role: "quit" },
+      ],
+    },
+    {
+      label: "打样",
+      submenu: [
+        { label: "盖印打样", accelerator: "CmdOrCtrl+Enter", click: () => send("stamp") },
+        { label: "对比原图", click: () => send("compare") },
+        { label: "放大复位", click: () => send("zoom-reset") },
+      ],
+    },
+    {
+      label: "导出",
+      submenu: [
+        { label: "存 TXT", accelerator: "CmdOrCtrl+S", click: () => send("save-txt") },
+        { label: "存 PNG", accelerator: "CmdOrCtrl+Shift+S", click: () => send("save-png") },
+        { type: "separator" },
+        { label: "导出 MP4（原帧率）…", click: () => send("export-mp4") },
+        { label: "导出 GIF 动图…", click: () => send("export-gif") },
+      ],
+    },
+    {
+      label: "帮助",
+      submenu: [
+        {
+          label: "关于 GlyphWorks",
+          click: () => {
+            void dialog.showMessageBox({
+              title: "关于 字符工坊 GlyphWorks",
+              message: `字符工坊 GlyphWorks v${app.getVersion()}`,
+              detail: "本地转换 · 不上传 · 不存储\nKEENTROPY 桌面版画台 · MIT",
+              buttons: ["好"],
+            });
+          },
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
@@ -694,6 +762,28 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    buildMenu();
+    // 启动时清理上次遗留的导出临时目录(超过一天的 glyphworks-*)
+    try {
+      const tmpEntries = await fsp.readdir(os.tmpdir());
+      const stale = tmpEntries
+        .filter((name) => name.startsWith("glyphworks-"))
+        .slice(0, 200);
+      for (const name of stale) {
+        const dir = path.join(os.tmpdir(), name);
+        try {
+          const stat = await fsp.stat(dir);
+          if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
+            await fsp.rm(dir, { recursive: true, force: true });
+          }
+        } catch {
+          // 单个目录清理失败不影响启动
+        }
+      }
+    } catch {
+      // 清理失败不影响启动
+    }
+
     protocol.handle("media", async (request) => {
       try {
         const url = new URL(request.url);
@@ -763,9 +853,9 @@ if (!gotSingleInstanceLock) {
     }
 
     if (parsed.guiCheck && parsed.input) {
+      firstLaunchPath = parsed.input as string;
       const window = createWindow(true);
       window.webContents.on("did-finish-load", () => {
-        window.webContents.send("app:open-path", parsed.input as string);
         const started = Date.now();
         const timer = setInterval(() => {
           window.webContents
@@ -777,8 +867,18 @@ if (!gotSingleInstanceLock) {
                 app.exit(0);
               } else if (Date.now() - started > 10000) {
                 clearInterval(timer);
-                console.error("GUI-CHECK FAIL: no preview");
-                app.exit(1);
+                window.webContents
+                  .executeJavaScript(
+                    `(() => JSON.stringify({ stats: document.querySelector('.output-stats')?.textContent ?? null, error: document.querySelector('.error-bar')?.textContent ?? null, media: Boolean(document.querySelector('.media-preview')) }))()`,
+                  )
+                  .then((diag: string) => {
+                    console.error(`GUI-CHECK FAIL: no preview ${diag}`);
+                    app.exit(1);
+                  })
+                  .catch(() => {
+                    console.error("GUI-CHECK FAIL: no preview");
+                    app.exit(1);
+                  });
               }
             })
             .catch((error) => {
@@ -806,19 +906,25 @@ if (!gotSingleInstanceLock) {
     const shotIndex = process.argv.indexOf("--shot");
     const shotPath = shotIndex >= 0 ? path.resolve(process.argv[shotIndex + 1] ?? "shot.png") : null;
     const window = createWindow(false);
-    window.webContents.on("did-finish-load", () => {
-      if (firstLaunchPath) {
-        window.webContents.send("app:open-path", firstLaunchPath);
-        firstLaunchPath = null;
-      }
-    });
+    // 首启文件的打开由渲染器通过 app:renderer-ready 握手拉取,避免消息早于监听器注册
     if (shotPath) {
       // 开发辅助:截取 hero、空态工作室与示例态工作室三张界面图,供视觉审查(不进入发布流程)
       window.webContents.once("did-finish-load", () => {
         const base = shotPath.replace(/\.png$/i, "");
+        // capturePage 在窗口被遮挡/合成器忙时偶发 UnknownVizError,重试三次
         const capture = async (name: string) => {
-          const image = await window.webContents.capturePage();
-          await fsp.writeFile(`${base}-${name}.png`, image.toPNG());
+          let lastError: unknown = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              const image = await window.webContents.capturePage();
+              await fsp.writeFile(`${base}-${name}.png`, image.toPNG());
+              return;
+            } catch (error) {
+              lastError = error;
+              await new Promise((resolve) => setTimeout(resolve, 600));
+            }
+          }
+          throw lastError;
         };
         setTimeout(async () => {
           try {
