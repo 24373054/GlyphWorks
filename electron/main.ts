@@ -305,6 +305,8 @@ function spawnDecode(session: ExportSession, columns: number, sampleRows: number
 }
 
 async function cleanupTemp(session: ExportSession): Promise<void> {
+  // 调试:GLYPHWORKS_KEEP_TEMP=1 时保留临时目录,便于比对帧文件
+  if (process.env.GLYPHWORKS_KEEP_TEMP === "1") return;
   await fsp.rm(session.tempDir, { recursive: true, force: true }).catch(() => undefined);
 }
 
@@ -360,9 +362,12 @@ function runEncode(session: ExportSession, withAudio: boolean): Promise<number |
         "-map", "0:v:0",
         "-map", "1:a?",
         "-c:v", "libx264",
-        "-preset", "medium",
+        // 小内存足迹(无前瞻/单参考帧/双线程):低内存机器与受限环境均可编码;
+        // ASCII 艺术内容简单,veryfast 在 crf 16 下画质损失不可见
+        "-preset", "veryfast",
         "-crf", "16",
         "-pix_fmt", "yuv420p",
+        "-threads", "2",
         "-r", String(session.fps),
         "-c:a", "aac",
         "-b:a", "192k",
@@ -374,9 +379,10 @@ function runEncode(session: ExportSession, withAudio: boolean): Promise<number |
         ...base,
         "-map", "0:v:0",
         "-c:v", "libx264",
-        "-preset", "medium",
+        "-preset", "veryfast",
         "-crf", "16",
         "-pix_fmt", "yuv420p",
+        "-threads", "2",
         "-r", String(session.fps),
         "-movflags", "+faststart",
         session.outputPath,
@@ -595,6 +601,12 @@ function registerIpc(): void {
       await Promise.all([cleanupTemp(session), removeOutput(session)]);
       sessions.delete(sessionId);
       const log = session.encodeError;
+      if (process.env.GLYPHWORKS_KEEP_TEMP === "1") {
+        // 调试:完整编码日志落盘,避免错误摘要截断
+        await fsp
+          .writeFile(path.join(session.tempDir, "encode-error.txt"), log)
+          .catch(() => undefined);
+      }
       const detail =
         log.length > 1200
           ? `${log.slice(0, 500)}\n…（中间省略）…\n${log.slice(-500)}`

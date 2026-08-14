@@ -1447,7 +1447,7 @@ export default function AsciiStudio() {
         ? estimateRows(columns, width, height, true, aspectFactor) * 2
         : estimateRows(columns, width, height, false, aspectFactor);
       const textRows = halfBlock ? sampleRows / 2 : sampleRows;
-      const canvas = makeExportCanvas(columns, textRows, exportOptions.theme, isGif ? 960 : 1920);
+      const canvas = makeExportCanvas(columns, textRows, exportOptions.theme, isGif ? 960 : 1600);
       const dualLUT = cachedDualLUT(RAMPS[exportOptions.ramp], exportOptions.theme);
       const totalFrames = Math.max(1, Math.round(duration * fps));
       if (isGif && totalFrames > 600) {
